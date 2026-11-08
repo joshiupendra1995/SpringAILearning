@@ -1,0 +1,8 @@
+/Users/upendrajoshi/Projects/SpringAILearning/src/main/java/com/springai/fundamentals/SpringAiFundamentalsApplication.java
+/Users/upendrajoshi/Projects/SpringAILearning/src/main/java/com/springai/fundamentals/config/OllamaClientConfiguration.java
+/Users/upendrajoshi/Projects/SpringAILearning/src/main/java/com/springai/fundamentals/controller/ChatController.java
+/Users/upendrajoshi/Projects/SpringAILearning/src/main/java/com/springai/fundamentals/exception/ApiExceptionHandler.java
+/Users/upendrajoshi/Projects/SpringAILearning/src/main/java/com/springai/fundamentals/model/ApiError.java
+/Users/upendrajoshi/Projects/SpringAILearning/src/main/java/com/springai/fundamentals/model/ChatRequest.java
+/Users/upendrajoshi/Projects/SpringAILearning/src/main/java/com/springai/fundamentals/model/ChatResponse.java
+/Users/upendrajoshi/Projects/SpringAILearning/src/main/java/com/springai/fundamentals/service/ChatService.java

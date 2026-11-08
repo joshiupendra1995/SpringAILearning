@@ -1,0 +1,21 @@
+spring:
+  application:
+    name: spring-ai-fundamentals
+  ai:
+    ollama:
+      base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
+      chat:
+        options:
+          model: llama3:latest
+          temperature: 0.4
+
+app:
+  ollama:
+    response-timeout: ${OLLAMA_RESPONSE_TIMEOUT:5m}
+
+server:
+  port: ${PORT:8080}
+
+logging:
+  level:
+    org.springframework.ai: INFO

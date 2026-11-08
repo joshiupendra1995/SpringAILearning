@@ -1,0 +1,8 @@
+com/springai/fundamentals/SpringAiFundamentalsApplication.class
+com/springai/fundamentals/model/ChatResponse.class
+com/springai/fundamentals/service/ChatService.class
+com/springai/fundamentals/controller/ChatController.class
+com/springai/fundamentals/exception/ApiExceptionHandler.class
+com/springai/fundamentals/model/ApiError.class
+com/springai/fundamentals/model/ChatRequest.class
+com/springai/fundamentals/config/OllamaClientConfiguration.class
