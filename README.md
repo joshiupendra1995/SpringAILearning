@@ -19,6 +19,144 @@ An interactive learning app for modern AI concepts and the Spring AI programming
 
 Some lesson snippets are illustrative: multimodal prompts, structured-output conversion, non-text document readers, metadata enrichers, modular RAG pipelines, and action-taking tools are not wired into the interactive chat.
 
+## Architecture
+
+The application is a single Spring Boot WebFlux service with a browser-based learning UI. It has three deliberately separate chat paths: retrieval-augmented generation (the default), a general tutor without retrieval, and optional read-only Java tools. Ollama provides the chat and embedding models; bundled notes ship with the application, while the vector index and chat memory are held in process memory.
+
+### Application architecture
+
+<!-- mermaid-checked: no \n, no em-dash/en-dash, no {} in labels, subgraphs are id["label"], arrows are -->|"label"|, all subgraphs closed by end, ids unique -->
+```mermaid
+flowchart TD
+    subgraph aClient["Client"]
+        aBrowser["Browser UI"]
+    end
+    subgraph aApp["Spring Boot WebFlux application"]
+        aStatic["Static HTML CSS JS"]
+        aChatApi["Chat API and SSE"]
+        aKnowledgeApi["Knowledge API"]
+        aChatService["Chat service"]
+        aKnowledgeService["Knowledge service"]
+        aLearningTools["LearningTools"]
+    end
+    subgraph aState["Process local state"]
+        aMemory[("Chat memory")]
+        aVector[("SimpleVectorStore")]
+        aNotes["Bundled learning notes"]
+    end
+    subgraph aExternal["Local model service"]
+        aChatModel["Ollama chat model"]
+        aEmbedModel["Ollama embedding model"]
+    end
+
+    aBrowser -->|"loads"| aStatic
+    aBrowser -->|"chat request and event stream"| aChatApi
+    aBrowser -->|"status and index requests"| aKnowledgeApi
+    aChatApi -->|"routes selected mode"| aChatService
+    aKnowledgeApi -->|"status or rebuild"| aKnowledgeService
+    aChatService -->|"session and mode history"| aMemory
+    aChatService -->|"RAG mode only"| aKnowledgeService
+    aChatService -->|"tools mode only"| aLearningTools
+    aKnowledgeService -->|"reads and chunks"| aNotes
+    aKnowledgeService -->|"indexes and searches"| aVector
+    aKnowledgeService -->|"embeds documents and queries"| aEmbedModel
+    aChatService -->|"prompt and stream"| aChatModel
+    aChatModel -->|"generated text"| aChatService
+    aChatService -->|"SSE tokens and completion"| aChatApi
+```
+
+### Chat modes and request flow
+
+`POST /api/chat` validates the message, mode, and optional RAG topic before dispatching to `ChatService`. The browser starts in RAG mode; the API also defaults to RAG when `mode` is omitted. Each mode uses a separate conversation-history key for the same WebSession.
+
+| Mode | Retrieval | Java tools | Model behavior |
+| --- | --- | --- | --- |
+| `rag` (default) | Searches bundled notes with `QuestionAnswerAdvisor` | None; `LearningTools` is not registered | Grounds responses in retrieved passages; adds retrieved source filenames |
+| `tutor` | None | None | Answers using the tutor system prompt and chat model |
+| `tools` | None | Read-only `LearningTools` methods | The model may request the current time or a lesson outline; Java validates and executes the request |
+
+Chat responses stream as Server-Sent Events. Token events carry generated text, RAG adds source names after the answer, and a done event closes the stream. Validation failures before streaming starts return a JSON error; failures during streaming are sent as a user-safe error event. `DELETE /api/chat` clears the current session’s histories in all three modes without removing the knowledge index.
+
+### RAG indexing and retrieval
+
+Indexing and answering are separate phases. Starting the app or checking `GET /api/knowledge` does not call Ollama. On the first RAG question, the service prepares the index; simultaneous first questions share the same build. A manual rebuild through the UI or `POST /api/knowledge/index` builds a replacement first and only publishes it after a successful index.
+
+<!-- mermaid-checked: no \n, no em-dash/en-dash, no {} in labels, subgraphs are id["label"], arrows are -->|"label"|, all subgraphs closed by end, ids unique -->
+```mermaid
+flowchart LR
+    subgraph cIndex["Offline indexing"]
+        cFiles["Bundled text notes"]
+        cReader["TextReader and metadata"]
+        cSplitter["TokenTextSplitter"]
+        cEmbed["Ollama embedding model"]
+        cStore[("In memory SimpleVectorStore")]
+        cFiles -->|"extract"| cReader
+        cReader -->|"documents with source and topic"| cSplitter
+        cSplitter -->|"chunks to embed"| cEmbed
+        cEmbed -->|"vectors and chunk metadata"| cStore
+    end
+    subgraph cQuestion["Online RAG question"]
+        cRequest["Question and topic"]
+        cFilter["Validated topic filter"]
+        cSearch["QuestionAnswerAdvisor"]
+        cGround["RagGroundingAdvisor"]
+        cPrompt["Grounded prompt"]
+        cChat["Ollama chat model"]
+        cAnswer["Streamed answer and sources"]
+        cNoContext["Grounded refusal"]
+        cRequest -->|"topic selection"| cFilter
+        cFilter -->|"top K and threshold"| cSearch
+        cSearch -->|"retrieves matching chunks"| cStore
+        cSearch -->|"retrieved context"| cGround
+        cGround -->|"nonempty context"| cPrompt
+        cGround -->|"no context"| cNoContext
+        cPrompt -->|"generation"| cChat
+        cChat -->|"response"| cAnswer
+        cNoContext -->|"refusal response"| cAnswer
+    end
+```
+
+The index pipeline reads `src/main/resources/knowledge/*.txt`, attaches source and topic metadata, splits documents into chunks, embeds them with the configured Ollama embedding model, and loads a `SimpleVectorStore`. The current defaults retrieve at most three chunks and apply a 0.45 similarity threshold. A selected topic restricts candidates to `rag`, `spring-ai`, or `tools`; Java builds the filter rather than accepting a raw filter expression from the client. If retrieval returns no usable notes, the grounding advisor prevents the chat model from being called. Successful RAG answers include the distinct source filenames from the retrieved documents.
+
+The vector store and bounded chat memory are process-local, not a database or external vector service. An app restart clears both; the next RAG question rebuilds the index. Indexing and querying must use the same embedding model and vector dimensions.
+
+### Components and responsibilities
+
+| Component | Responsibility |
+| --- | --- |
+| Browser UI (`static/index.html`, `app.js`, `styles.css`) | Selects chat mode and RAG topic, submits requests, reads SSE, and reports index status |
+| `ChatController` | Validates chat requests, obtains the WebSession, routes streaming events, and clears session histories |
+| `ChatService` | Dispatches RAG, tutor, and tools modes; configures prompt and memory advisors; streams model output |
+| `KnowledgeController` | Reports knowledge status and exposes an explicit index rebuild endpoint |
+| `KnowledgeService` | Loads and chunks notes, builds or replaces the vector store, and supplies topic-filtered search settings |
+| `QuestionAnswerAdvisor` | Searches the selected vector store and adds matching note text to the RAG prompt |
+| `RagGroundingAdvisor` | Stops generation when retrieval provides no documents |
+| `LearningTools` | Supplies explicitly registered, read-only time and lesson-outline functions in tools mode only |
+| Ollama | Hosts the configured chat model and embedding model locally |
+
+Spring AI's `MessageChatMemoryAdvisor` keeps bounded in-memory histories using the server WebSession ID plus the mode. The chat model and embedding model share the configured Ollama endpoint but serve different roles. No relational database, persistent vector database, web-search service, or external tools service is part of this app.
+
+### Technology stack
+
+| Layer | Technology | Version | Purpose |
+| --- | --- | --- | --- |
+| Browser | HTML, CSS, JavaScript | — | Learning UI and SSE client |
+| Web application | Spring Boot, Spring WebFlux | 4.0.0, Spring Boot managed | Static resources and reactive HTTP APIs |
+| AI integration | Spring AI | 2.0.1 | ChatClient, Ollama models, advisors, embeddings, vector store |
+| Runtime | Java | 21+ | Application services and tool execution |
+| Chat model | Ollama, `llama3:latest` by default | Configurable | Tutor and RAG answer generation; tools mode needs a tool-capable model |
+| Embedding model | Ollama, `nomic-embed-text` by default | Configurable | Document indexing and query vectors |
+| Knowledge storage | `SimpleVectorStore` | In-memory | Note text, metadata, and embeddings; rebuilt after restart |
+| Conversation storage | Spring AI chat memory | In-memory | Bounded, per-WebSession and per-mode history |
+
+### Architectural decisions and boundaries
+
+- RAG, tutor, and tools are explicit alternative modes, not a combined autonomous workflow. In particular, the default RAG path does not register or invoke `LearningTools`.
+- `SimpleVectorStore` keeps this learning app self-contained and demonstrates the vector-store API; it is not durable or shared across application instances.
+- First-use indexing happens on a RAG request rather than app startup, and replacement indexes are published only after a successful build.
+- Topic filters select among this shared set of learning notes. They are relevance controls, not user authorization or access controls.
+- The RAG search uses the current user question; it does not rewrite it from conversation history. The model is instructed to answer from retrieved notes, but generated answers are not guaranteed correct.
+
 ## Requirements
 
 - Java 21 or newer
