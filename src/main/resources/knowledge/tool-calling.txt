@@ -1,0 +1,13 @@
+Tool calling in Spring AI
+
+A bare language model generates output; it does not execute Java code, call your database, or send an email itself. Tool calling lets a model request a named operation with structured arguments. The application owns execution and decides what each operation is allowed to do.
+
+The tool calling loop begins when the application sends available tool names, descriptions, and parameter schemas with the question. The model may request a tool call. The application validates arguments, executes the Java method, and returns the result to the model. The model then generates an answer or asks for another tool. A single question can require several dependent calls. Execution budgets and authorization remain application responsibilities.
+
+Spring AI @Tool describes an available method, and @ToolParam describes an argument. Clear descriptions help the model choose the right operation and supply useful arguments. Spring AI derives a JSON input schema from method arguments. In Spring AI 2, ChatClient auto-registers ToolCallingAdvisor to drive the loop. Use ChatClient.prompt().tools(tools).toolContext(context).stream().content() to enable tools for a particular streaming request. Tools require a chat model that supports tool calling, such as the Ollama llama3.1 family.
+
+ToolContext carries trusted application data at execution time and is not exposed as a model-generated argument in the tool input schema. Inject user identity, tenant boundaries, credentials, or application settings from trusted code rather than accepting them from the model. Do not treat model arguments as authorization. Validate arguments, limit capabilities, and obtain suitable confirmation before consequential actions.
+
+This app's tools mode exposes only two read-only Java tools. getCurrentDateTime reads the current server clock in a timezone injected by application configuration through ToolContext; it takes no model-supplied timezone. getLessonOutline accepts a validated topic: fundamentals, spring-ai, advisors, rag, or tools, and returns the app's lesson outline. These methods do not write records, contact external services, send messages, or perform actions.
+
+RAG and tool calling solve complementary problems. RAG provides supporting passages from a knowledge collection. Tools can retrieve live information or execute application operations. RAG can itself be exposed as a tool in another design. In this learning app, RAG and tools use separate modes rather than a combined autonomous workflow.

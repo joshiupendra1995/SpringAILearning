@@ -24,7 +24,7 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-button, textarea { font: inherit; }
+button, textarea, select { font: inherit; }
 
 .topbar {
   position: sticky;
@@ -77,7 +77,16 @@ button, textarea { font: inherit; }
 .tutor-status > span { width: 7px; height: 7px; border-radius: 50%; background: #50a47a; box-shadow: 0 0 0 3px #dff1e6; }
 .new-chat-button { border: 1px solid #dfe9e3; border-radius: 9px; padding: 8px 10px; background: #fff; color: #4e675b; cursor: pointer; font-size: 10px; font-weight: 600; white-space: nowrap; }
 .new-chat-button:hover { border-color: #a9cfb8; background: #f4faf6; }
+.new-chat-button:disabled { opacity: .6; cursor: wait; }
 .chat-panel { display: flex; min-height: 390px; max-width: 800px; flex-direction: column; margin: 0 auto; overflow: hidden; border: 1px solid #e3ebe6; border-radius: 16px; background: rgba(255,255,255,.92); box-shadow: 0 5px 16px #1c3a2a08; }
+.chat-mode-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; padding: 15px 20px; border-bottom: 1px solid var(--line); background: #f8fbf9; }
+.chat-mode-controls label { color: #4e675b; font-size: 11px; font-weight: 600; }
+.chat-mode-controls select { max-width: 100%; border: 1px solid #dfe9e3; border-radius: 8px; padding: 7px; background: #fff; color: #34443c; font-size: 11px; }
+.chat-mode-controls select:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+#rag-topic-controls:not([hidden]) { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 9px; }
+.lesson-heading .text-link { display: inline-block; margin-top: 14px; }
+#knowledge-status { color: var(--muted); font-size: 10px; }
+#mode-help { flex-basis: 100%; margin: 0; color: var(--muted); font-size: 10px; line-height: 1.6; }
 .chat-messages { display: flex; min-height: 246px; max-height: 440px; flex: 1; flex-direction: column; gap: 16px; overflow-y: auto; padding: 25px 27px 15px; }
 .message { display: flex; align-items: start; gap: 10px; max-width: 82%; }
 .message-user { align-self: flex-end; flex-direction: row-reverse; }
@@ -213,6 +222,19 @@ h1 span { color: var(--green); }
 .lesson-takeaway { margin-top: 17px; border: 1px solid #cfe4d6; border-radius: 12px; padding: 19px 22px; background: #f1f8f4; color: #365646; }
 .lesson-takeaway strong { font-family: var(--display); font-size: 13px; }
 .lesson-takeaway p { margin: 6px 0 0; color: #5d7067; font-size: 11px; line-height: 1.7; }
+.lesson-takeaway a { color: var(--green-dark); }
+.pattern-diagram { padding: 23px; border: 1px solid #dfe9e3; border-radius: 12px; background: #f8fbf9; }
+.pattern-flow { display: grid; gap: 13px; margin: 17px 0; padding-left: 23px; color: var(--green); }
+.pattern-flow li { padding-left: 5px; }
+.pattern-flow strong { display: block; margin-bottom: 4px; color: #344d40; font-size: 12px; }
+.pattern-flow li span { display: block; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.comparison-scroll { overflow-x: auto; margin-top: 18px; }
+.pattern-comparison { width: 100%; border-collapse: collapse; font-size: 11px; line-height: 1.6; text-align: left; }
+.pattern-comparison caption { padding: 0 0 12px; color: var(--muted); text-align: left; }
+.pattern-comparison th, .pattern-comparison td { min-width: 140px; padding: 12px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.pattern-comparison thead th { background: var(--mint); color: var(--green-dark); }
+.pattern-comparison tbody th { color: #344d40; font-weight: 600; }
+.pattern-comparison td { color: var(--muted); }
 
 .footer { display: flex; justify-content: space-between; padding: 18px 4px 30px; color: #83908a; font-size: 10px; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; clip-path: inset(50%); }
@@ -231,9 +253,10 @@ h1 span { color: var(--green); }
 @media (max-width: 580px) {
   .topbar { height: 60px; padding: 0 20px; }
   .brand { font-size: 13px; }
+  .brand-light { display: none; }
   .top-nav { gap: 10px; }
   .top-nav a { font-size: 10px; }
-  .version-pill { font-size: 9px; }
+  .version-pill { display: none; }
   .page-shell { width: min(100% - 28px, 480px); }
   .tutor-section { margin: 14px auto 20px; padding: 23px 13px 13px; border-radius: 14px; }
   .tutor-heading { align-items: flex-start; gap: 13px; margin: 0 6px 16px; }
@@ -242,6 +265,7 @@ h1 span { color: var(--green); }
   .tutor-tools { align-items: flex-end; flex-direction: column; gap: 7px; }
   .tutor-status { margin-top: 0; padding: 7px 8px; font-size: 9px; }
   .chat-panel { min-height: 370px; border-radius: 13px; }
+  .chat-mode-controls { padding: 12px 13px; }
   .chat-messages { min-height: 230px; padding: 17px 13px 12px; }
   .message { max-width: 96%; }
   .message p { font-size: 12px; }

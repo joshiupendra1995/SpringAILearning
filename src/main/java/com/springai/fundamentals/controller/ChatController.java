@@ -1,8 +1,10 @@
 package com.springai.fundamentals.controller;
 
 import com.springai.fundamentals.model.ChatRequest;
+import com.springai.fundamentals.model.RagTopic;
 import com.springai.fundamentals.service.ChatService;
 import io.netty.handler.timeout.ReadTimeoutException;
+import java.util.Set;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
@@ -28,6 +30,7 @@ import reactor.core.publisher.Mono;
 public class ChatController {
 
     private static final int MAX_PROMPT_LENGTH = 2_000;
+    private static final Set<String> CHAT_MODES = Set.of("tutor", "rag", "tools");
 
     private final ChatService chatService;
 
@@ -41,9 +44,29 @@ public class ChatController {
                     HttpStatus.BAD_REQUEST,
                     "Message must be at most " + MAX_PROMPT_LENGTH + " characters.");
         }
+        String mode = request.mode() == null ? "rag" : request.mode();
+        if (!CHAT_MODES.contains(mode)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Mode must be tutor, rag, or tools.");
+        }
+        RagTopic topic;
+        try {
+            topic = RagTopic.fromValue(request.topic());
+        } catch (IllegalArgumentException exception) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, exception.getMessage());
+        }
+        if (request.topic() != null && !mode.equals("rag")) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Topic is only supported in rag mode.");
+        }
 
         session.start();
-        return chatService.stream(request.message(), session.getId())
+        Flux<String> answer;
+        if (request.topic() != null) {
+            answer = chatService.stream(request.message(), session.getId(), mode, topic);
+        } else {
+            answer = chatService.stream(request.message(), session.getId(), mode);
+        }
+        return answer
                 .map(token -> ServerSentEvent.builder(token).event("token").build())
                 .onErrorResume(exception -> {
                     log.warn("Ollama chat stream failed.", exception);
@@ -61,11 +84,14 @@ public class ChatController {
     }
 
     private String errorMessage(Throwable exception) {
+        if (exception instanceof ResponseStatusException statusException) {
+            return statusException.getReason();
+        }
         if (hasCause(exception, ReadTimeoutException.class)) {
             return "Ollama took too long to respond. Wait for the model to finish loading, then try again.";
         }
         if (hasCause(exception, WebClientRequestException.class)) {
-            return "Could not connect to Ollama. Make sure Ollama is running and llama3:latest is available.";
+            return "Could not connect to Ollama. Make sure Ollama is running and the configured model is available.";
         }
         return "Ollama could not complete the request. Please try again.";
     }

@@ -6,6 +6,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.exception.ExceptionUtils;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.reactive.function.client.WebClientRequestException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -20,7 +21,7 @@ public class ApiExceptionHandler {
     public ResponseEntity<ApiError> handleResponseStatus(ResponseStatusException exception) {
         HttpStatusCode status = exception.getStatusCode();
         String message = exception.getReason() == null ? "Request could not be completed." : exception.getReason();
-        return ResponseEntity.status(status).body(new ApiError(message));
+        return ResponseEntity.status(status).contentType(MediaType.APPLICATION_JSON).body(new ApiError(message));
     }
 
     @ExceptionHandler(Exception.class)
@@ -28,6 +29,7 @@ public class ApiExceptionHandler {
         if (hasCause(exception, ReadTimeoutException.class)) {
             log.warn("Ollama did not respond before the configured response timeout.", exception);
             return ResponseEntity.status(HttpStatus.GATEWAY_TIMEOUT)
+                    .contentType(MediaType.APPLICATION_JSON)
                     .body(new ApiError(
                             "Ollama took too long to respond. Wait for the model to finish loading, then try again."));
         }
@@ -35,10 +37,12 @@ public class ApiExceptionHandler {
         log.error("Unexpected failure while handling an AI chat request.", exception);
         if (hasCause(exception, WebClientRequestException.class)) {
             return ResponseEntity.internalServerError()
+                    .contentType(MediaType.APPLICATION_JSON)
                     .body(new ApiError(
-                            "Could not connect to Ollama. Make sure Ollama is running and llama3:latest is available."));
+                            "Could not connect to Ollama. Make sure Ollama is running and the configured model is available."));
         }
         return ResponseEntity.internalServerError()
+                .contentType(MediaType.APPLICATION_JSON)
                 .body(new ApiError("Ollama could not complete the request. Please try again."));
     }
 

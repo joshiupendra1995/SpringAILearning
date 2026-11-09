@@ -1,0 +1,11 @@
+Retrieval augmented generation (RAG)
+
+A language model learns patterns from training data. Its internal knowledge can be stale, incomplete, or missing private information. A plausible generated answer is not proof that a fact is true. Hallucination means producing unsupported or incorrect content.
+
+RAG retrieves relevant information at question time, augments the prompt with that information, and asks the model to generate a grounded answer. It is useful for private documentation and information that changes. It does not retrain or update the model's weights. Fine tuning adjusts weights and is often useful for behavior or style; it is not a substitute for keeping a factual knowledge source current.
+
+Pasting documentation into every prompt works for a small collection, but context windows limit how much fits. Extra input tokens add processing cost and latency. Retrieval selects focused passages so the model receives useful context rather than an entire manual.
+
+There are two phases. Offline indexing reads source documents, splits them into chunks, embeds each chunk, and stores vectors with the original text and metadata. Run indexing when the source documents or embedding configuration change. Online retrieval and generation embeds each question, searches for similar chunks, supplies their original text as context, and generates an answer. Documents are not reindexed for every question.
+
+In this app, the default chat uses RAG. QuestionAnswerAdvisor searches bundled text notes in a process-local SimpleVectorStore and augments the question. The first RAG question automatically builds a missing index before retrieval; concurrent first questions share that build, and later questions reuse the completed index. No indexing occurs at application startup. An optional topic selector restricts matching notes using metadata. A downstream RagGroundingAdvisor refuses without calling the chat model if no chunks meet the filter and search threshold. Retrieved filenames are appended to the answer from the advisor response context. Failed preparation reports a setup error instead of falling back to a model-only answer. Relevant matches can still fail to contain the actual answer, so the prompt also asks the model to acknowledge insufficient evidence. RAG reduces unsupported answers but cannot guarantee factual correctness.

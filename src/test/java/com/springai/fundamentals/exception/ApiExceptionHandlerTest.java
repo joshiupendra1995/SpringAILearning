@@ -31,7 +31,7 @@ class ApiExceptionHandlerTest {
 
         assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, response.getStatusCode());
         assertEquals(
-                "Could not connect to Ollama. Make sure Ollama is running and llama3:latest is available.",
+                "Could not connect to Ollama. Make sure Ollama is running and the configured model is available.",
                 response.getBody().error());
     }
 }

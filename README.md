@@ -1,22 +1,23 @@
 # Spring AI Fundamentals
 
-An interactive learning app for the concepts behind modern AI and the Spring AI programming model. Read the lessons, inspect Java examples, then ask a local Spring AI-powered tutor follow-up questions.
+An interactive learning app for modern AI concepts and the Spring AI programming model. Read the lessons, inspect Java examples, and experiment with a local tutor, document retrieval, and application tools.
 
 ## What’s implemented
 
-- **Fundamentals guide:** explains the nested AI → machine learning → deep learning → generative AI relationship, why generative AI took off, how LLMs generate text, and common limitations.
-- **Spring AI lessons:** introduces the `ChatModel` and `ChatClient` abstractions, provider starters and BOM configuration, prompts and message roles, `PromptTemplate`, model options and response usage metadata, blocking versus streaming, multimodal messages, structured output into Java types, and the Advisors API.
-- **Advisor concepts in code:** registers Spring AI’s `MessageChatMemoryAdvisor` on the chat client and supplies the current server WebSession ID as the conversation ID for each reactive call.
-- **Session chat memory:** follow-up prompts in one browser session include earlier turns from a bounded in-memory message window. The “New chat” button clears that session’s memory. Memory is process-local and lost when the app restarts.
-- **Reactive streaming tutor:** uses Spring AI `ChatClient.stream().content()` with Ollama’s streaming chat API. The WebFlux endpoint emits Server-Sent Events, and the browser reads the response stream and displays text chunks as they arrive.
-- **Educational Java examples:** the lesson snippets illustrate Spring AI APIs. Reactive text streaming is implemented in this app; multimodal prompts and structured-output conversion are covered as concepts but are not wired into the interactive chat.
-- **Interactive tutor:** sends a question to a Spring AI `ChatClient` backed by the local Ollama model `llama3:latest`. The tutor prompt encourages beginner-friendly explanations and calls out uncertainty and model limitations.
-- **Chat-first interface:** the local AI tutor is the first section on the page, with a large conversation area, suggested prompts, and an always-visible message composer.
-- **Reactive chat API:** `POST /api/chat` accepts one message and streams token chunks, while the memory advisor provides session-scoped context to the model.
-- **Responsive interface:** suggested questions, loading and error feedback, and a mobile-friendly layout. Conversation content is rendered as text, not HTML.
-- **Input guardrails:** the API rejects blank messages and messages longer than 2,000 characters.
-- **Java package structure:** controllers, request/response models, chat services, exception handling, and configuration are separated into `controller`, `model`, `service`, `exception`, and `config` packages.
-- **Boilerplate reduction:** Lombok supplies constructor injection and logging where appropriate; Apache Commons Lang handles blank-input checks and exception-cause lookup.
+- **AI fundamentals:** the AI → machine learning → deep learning → generative AI relationship, how LLMs generate text, tokens, context windows, hallucinations, and training cutoffs.
+- **Spring AI lessons:** `ChatModel` versus `ChatClient`, provider configuration, prompts and message roles, templates, model options, response metadata, streaming, multimodal input, structured output, and advisors.
+- **RAG lessons:** embeddings, vector dimensions, similarity search, top K, similarity thresholds, metadata filters, and the extract → transform → load indexing pipeline. Advanced examples introduce query rewriting, routing, hybrid search, reranking, and context compression.
+- **Spring AI RAG APIs:** `EmbeddingModel`, `Document`, `VectorStore`, `SearchRequest`, the ETL interfaces, `QuestionAnswerAdvisor`, custom context templates, and the modular `RetrievalAugmentationAdvisor`.
+- **Tool-calling lessons:** tool descriptions and generated schemas, the model/application execution loop, argument validation, and application-controlled context through `ToolContext`.
+- **RAG by default:** the chat starts in Learning tutor (RAG) mode, and API requests that omit `mode` also default to RAG. It retrieves relevant passages from bundled notes before generating an answer. General tutor mode is an explicit alternative without retrieval; tools mode lets a capable model request read-only Java functions.
+- **Automatic first-use indexing:** the first RAG question prepares the bundled learning notes, splits them into chunks, creates embeddings with Ollama, and loads an in-memory `SimpleVectorStore`. Concurrent first questions share the same build. Later questions reuse the index, and the browser’s rebuild button or API can refresh it. Starting the app does not call Ollama.
+- **Advisor-based RAG:** `QuestionAnswerAdvisor` searches the indexed notes and augments the user prompt. A downstream grounding advisor stops empty retrievals before the chat model is called. The application appends retrieved source filenames from the advisor context to the answer.
+- **Metadata filtering:** RAG requests can select all notes or restrict retrieval to `rag`, `spring-ai`, or `tools` using the indexed `topic` metadata. Java validates the selection and builds the filter; clients do not submit raw filter expressions.
+- **Session chat memory:** a `MessageChatMemoryAdvisor` supplies a bounded in-memory message history using a server-managed WebSession ID and a separate history for each mode. The “New chat” button clears all three mode histories for the current session.
+- **Reactive streaming:** `ChatClient` streaming responses feed Server-Sent Events to the browser. The interface displays text incrementally and renders conversation content as text rather than HTML.
+- **Input validation:** chat requests reject blank messages and messages longer than 2,000 characters; tool arguments are validated in Java.
+
+Some lesson snippets are illustrative: multimodal prompts, structured-output conversion, non-text document readers, metadata enrichers, modular RAG pipelines, and action-taking tools are not wired into the interactive chat.
 
 ## Requirements
 
@@ -26,49 +27,124 @@ An interactive learning app for the concepts behind modern AI and the Spring AI 
 
 ## Run locally
 
-Download the model and make sure Ollama is running:
+Start Ollama if it is not already running:
 
 ```bash
-ollama pull llama3:latest
 ollama serve
 ```
 
-In another terminal, start the app:
+In another terminal, download the default chat and embedding models, then start the app:
 
 ```bash
+ollama pull llama3:latest
+ollama pull nomic-embed-text
 mvn spring-boot:run
 ```
 
-Open [http://localhost:8080](http://localhost:8080). The default model is `llama3:latest`, served from Ollama at `http://localhost:11434`. Set `OLLAMA_BASE_URL` to use an Ollama server at a different address, or change `spring.ai.ollama.chat.options.model` in `src/main/resources/application.yml` to select another locally available model.
+Open [http://localhost:8080](http://localhost:8080). The chat starts in **Learning tutor (RAG)** mode and uses both models. API chat requests also use RAG when `mode` is omitted. Its first question prepares the notes automatically, which can take longer while the embedding model loads. Ollama defaults to `http://localhost:11434`; use `OLLAMA_BASE_URL` to change its address and `OLLAMA_CHAT_MODEL` to select another installed chat model.
 
-The page navigation links to the chat, AI learning path, and the Spring AI lessons. The tutor can answer questions about all of these topics. Browser cookies maintain a server WebSession so the advisor can scope conversation history without accepting a conversation ID from the request body.
+### Try RAG
 
-The Ollama HTTP response timeout defaults to 5 minutes to allow for model loading and slower local inference. Override it with `OLLAMA_RESPONSE_TIMEOUT`, using a Spring duration such as `2m` or `90s`.
+Ask a question such as “Why must indexing and querying use the same embedding model?” RAG is already selected. If no index exists, the server builds it before retrieving passages for that question. If preparation fails, chat reports the setup problem instead of falling back to an answer without retrieval. After a successful build, later questions reuse the index.
 
-### Troubleshooting Ollama connections
+Choose **General tutor (no retrieval)** only when you want the model to answer without the learning notes. That explicit mode requires only the chat model.
 
-The Reactor Netty message `The connection observed an error` is a connection-level warning. Check the exception that follows it: `ReadTimeoutException` means Ollama did not return data before the client timeout, while connection-refused errors usually mean Ollama is not listening at the configured address. The app allows 5 minutes by default for inference. Confirm Ollama is reachable and the model is installed:
+Use the RAG topic selector to search **All notes**, **RAG**, **Spring AI**, or **Tools**. For example, select **RAG** and ask “How does QuestionAnswerAdvisor augment a prompt?” The filter restricts the candidate documents before similarity ranking. It is a relevance control for this shared learning collection, not an authorization boundary.
+
+Indexing and retrieval remain separate phases. The app runs the indexing phase on first use when needed, then searches the completed index:
+
+```text
+Indexing: bundled notes → documents + metadata → chunks → embeddings → vector store
+Question: user question + topic → QuestionAnswerAdvisor → similar chunks → context + question → answer
+```
+
+An embedding is a numeric vector used to compare meaning. The vector store keeps the original text and metadata alongside each vector; generation uses the retrieved text, not a conversion of vectors back into words. Top K limits the number of returned chunks, and the similarity threshold removes weak matches.
+
+The index is held in application memory. After an app restart, the next RAG question prepares it again automatically. Use **Rebuild learning notes** or `POST /api/knowledge/index` to refresh an existing index after changing bundled notes or embedding configuration. Indexing and querying must use the same embedding model and dimensions. Updating the index does not retrain the chat model.
+
+### How the Spring AI RAG pieces fit
+
+`EmbeddingModel` is the portable embedding-provider contract. It can embed one string or a batch, while `VectorStore` normally calls it for document indexing and question retrieval:
+
+```java
+float[] vector = embeddingModel.embed("How does retrieval work?");
+List<float[]> vectors = embeddingModel.embed(List.of("First passage", "Second passage"));
+```
+
+A `Document` carries text and metadata. `vectorStore.add(documents)` embeds and stores both; `similaritySearch(SearchRequest)` embeds the query and returns matching original documents. A matching vector-store starter can supply a configured store bean. This demo builds a `SimpleVectorStore` explicitly so a successful reindex can atomically replace the previous store. Production stores have their own setup, schema, and filtering capabilities. See the [Spring AI vector store API](https://docs.spring.io/spring-ai/reference/api/vectordbs.html).
+
+The indexing stages are composable Java contracts:
+
+| Stage | Spring AI interface | Java functional interface | Active implementation |
+| --- | --- | --- | --- |
+| Extract | `DocumentReader` | `Supplier<List<Document>>` | `TextReader` over bundled notes |
+| Transform | `DocumentTransformer` | `Function<List<Document>, List<Document>>` | `TokenTextSplitter` |
+| Load | `DocumentWriter` | `Consumer<List<Document>>` | `SimpleVectorStore`, through `VectorStore` |
+
+The same pipeline can be expressed as `vectorStore.add(splitter.split(reader.read()))`. The lessons also introduce `PagePdfDocumentReader`, `TikaDocumentReader`, `JsonReader`, and `MarkdownDocumentReader`; the PDF, Tika, and Markdown readers require their corresponding optional dependencies. `KeywordMetadataEnricher` and `SummaryMetadataEnricher` can add model-generated metadata, at the cost of additional model calls. They are educational examples here. See the [Spring AI ETL pipeline](https://docs.spring.io/spring-ai/reference/api/etl-pipeline.html).
+
+The active RAG path adds the BOM-managed `spring-ai-vector-store-advisor` dependency and supplies a configured `QuestionAnswerAdvisor` to `ChatClient`. Its custom `PromptTemplate` includes both required placeholders: `{query}` for the question and `{question_answer_context}` for retrieved passages. Each request supplies a `SearchRequest` with top K, the similarity threshold, and any topic filter built with `FilterExpressionBuilder`. This avoids concatenating user text into a filter. The lessons also show the advisor's string-valued `QuestionAnswerAdvisor.FILTER_EXPRESSION` parameter as an alternative. See the [QuestionAnswerAdvisor reference](https://docs.spring.io/spring-ai/reference/api/retrieval-augmented-generation.html#_questionansweradvisor).
+
+The advisor retrieves once for each request. The grounding advisor checks the retrieved documents before allowing generation; matched documents remain reference data, and the prompt asks the model to acknowledge insufficient evidence. The source list identifies retrieved files and does not prove that every statement in a generated answer is supported.
+
+For more control, the lessons show `RetrievalAugmentationAdvisor` from the optional `spring-ai-rag` module. Its stages support query transformers (`CompressionQueryTransformer`, `RewriteQueryTransformer`, `TranslationQueryTransformer`), expansion (`MultiQueryExpander`), retrieval (`VectorStoreDocumentRetriever`), and generation context (`ContextualQueryAugmenter`). This modular pipeline is an example to study; the running app uses `QuestionAnswerAdvisor`. See [modular RAG](https://docs.spring.io/spring-ai/reference/api/retrieval-augmented-generation.html#_retrievalaugmentationadvisor).
+
+### Try tool calling
+
+Use a chat model that supports tool calling. For example, download `llama3.1:latest`, then start the app with it:
+
+```bash
+ollama pull llama3.1:latest
+OLLAMA_CHAT_MODEL=llama3.1:latest mvn spring-boot:run
+```
+
+Choose **Tools** and ask “What is the current date and time?” or “Show the RAG lesson outline.” The available tools are read-only application methods; the model chooses whether to request them, and Spring AI executes the Java code and passes results back to the model. The tool mode requires model support; the default `llama3:latest` model is intended for the ordinary tutor and RAG modes.
+
+The registered methods are:
+
+| Tool | Model-supplied arguments | Application behavior |
+| --- | --- | --- |
+| `getCurrentDateTime` | None | Reads the clock in the server-configured time zone supplied through `ToolContext` |
+| `getLessonOutline` | `topic`: `fundamentals`, `spring-ai`, `advisors`, `rag`, or `tools` | Validates the topic and returns its lesson outline |
+
+`ToolContext` supplies trusted configuration from the application rather than letting the model choose it. The time zone defaults to `Asia/Kolkata`; set `APP_TIME_ZONE` to change it. A tool call remains untrusted input: Java code validates model-supplied arguments and controls which operations are available. These examples do not send messages, update external systems, or access customer data.
+
+RAG and tools solve different problems and can be combined in larger applications:
+
+| Pattern | Supplies | Example in this app |
+| --- | --- | --- |
+| RAG | Relevant passages from indexed documentation | Explain embeddings using the bundled notes |
+| Tool calling | Results from application code at request time | Read the current time or a lesson outline |
+| Chat memory | Earlier conversation turns | Answer a follow-up in the same browser session |
+
+### Ollama configuration and troubleshooting
+
+The HTTP response timeout defaults to 5 minutes for model loading and local inference. Override `OLLAMA_RESPONSE_TIMEOUT` with a Spring duration such as `2m` or `90s`. `OLLAMA_EMBEDDING_MODEL` selects the embedding model and defaults to `nomic-embed-text`. These environment variables configure the Spring AI 2.0 properties `spring.ai.ollama.chat.model` and `spring.ai.ollama.embedding.model`. Retrieval defaults to `app.rag.top-k: 3` and `app.rag.similarity-threshold: 0.45` in `src/main/resources/application.yml`; adjust these to balance coverage and weak matches.
+
+If a request fails, confirm Ollama is reachable and the required model is installed:
 
 ```bash
 curl http://localhost:11434/api/tags
 ollama list
 ```
 
-If needed, start Ollama with `ollama serve`, verify `llama3:latest` is listed, and check that `OLLAMA_BASE_URL` points to the same host and port. If you still see a read timeout, check Ollama’s logs and machine resource usage, or increase `OLLAMA_RESPONSE_TIMEOUT`.
+A Reactor Netty `ReadTimeoutException` means Ollama did not respond within the configured timeout. Connection-refused errors usually mean Ollama is not listening at the configured address. Check Ollama’s logs and machine resource usage, verify `OLLAMA_BASE_URL`, and allow time for model loading. A missing embedding model affects indexing/RAG; an unsupported tool model affects tools mode.
 
 ## API
 
 ### `POST /api/chat` (Server-Sent Events)
 
-Request:
-
 ```json
 {
-  "message": "What is the difference between deep learning and generative AI?"
+  "message": "How does chunking improve retrieval?"
 }
 ```
 
-Successful response uses `Content-Type: text/event-stream`. Text arrives in `token` events, followed by a `done` event:
+`mode` is optional and defaults to `rag`. The server prepares the index on first use and retrieves notes before generation. Set `mode: "tutor"` explicitly to answer without retrieval, or `mode: "tools"` to expose the read-only Java tools.
+
+RAG also accepts optional `topic`: `all` (the default), `rag`, `spring-ai`, or `tools`. A topic is valid when `mode` is omitted because that request uses RAG. Omit `topic` for explicit tutor and tools requests. Invalid topics or a topic supplied outside RAG mode return `400 Bad Request`; raw filter strings are not accepted.
+
+Successful responses use `Content-Type: text/event-stream`. Text arrives in `token` events, followed by `done`. RAG uses these same events and appends its source list as text:
 
 ```text
 event:token
@@ -81,22 +157,65 @@ event:done
 data:
 ```
 
-Try the streaming endpoint with curl:
+Try the default RAG chat:
 
 ```bash
 curl -N http://localhost:8080/api/chat \
   -H 'Content-Type: application/json' \
   -H 'Accept: text/event-stream' \
-  -d '{"message":"Explain what a token is"}'
+  -d '{"message":"How does chunking improve retrieval?"}'
 ```
 
-Invalid input returns `400 Bad Request` with a JSON error before the stream starts. Ollama failures after streaming begins are delivered as an `error` event with a user-safe message, followed by `done`; provider exception details are logged by the server, not sent to the browser.
+Restrict RAG to one topic:
 
-The endpoint uses the server-managed WebSession cookie to identify conversation memory. Keep the cookie between requests to continue the same chat.
+```bash
+curl -N http://localhost:8080/api/chat \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: text/event-stream' \
+  -d '{"message":"How does chunking improve retrieval?","mode":"rag","topic":"rag"}'
+```
+
+Use the general tutor without retrieval explicitly:
+
+```bash
+curl -N http://localhost:8080/api/chat \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: text/event-stream' \
+  -d '{"message":"Explain what a token is","mode":"tutor"}'
+```
+
+Try a tool-capable model:
+
+```bash
+curl -N http://localhost:8080/api/chat \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: text/event-stream' \
+  -d '{"message":"What is the current date and time?","mode":"tools"}'
+```
+
+Invalid input returns `400 Bad Request` with a JSON error before streaming starts. Failures after streaming begins produce a user-safe `error` event followed by `done`; provider exception details are logged on the server. An empty filtered retrieval produces a normal streamed refusal without calling the chat model. If first-use indexing cannot complete, a streamed error explains that Ollama and the configured embedding model must be available; the next request can retry preparation.
+
+Browser cookies maintain the WebSession used for chat memory. With curl, use a cookie jar (`-c cookies.txt -b cookies.txt`) across requests to continue the same conversation.
 
 ### `DELETE /api/chat`
 
-Clears the current WebSession’s in-memory chat history. The browser’s “New chat” button calls this endpoint before starting a fresh conversation.
+Clears the current WebSession’s chat history in all three modes. The browser’s “New chat” button calls this endpoint. It does not remove the document index.
+
+### `GET /api/knowledge`
+
+Returns the current in-memory indexing status. Reading status does not load documents or call Ollama. The response includes `indexed`, `documentCount`, `chunkCount`, `embeddingModel`, and `indexedAt` (an ISO instant, or `null` before indexing).
+
+```bash
+curl http://localhost:8080/api/knowledge
+```
+
+### `POST /api/knowledge/index`
+
+Explicitly rebuilds the bundled learning notes using the configured embedding model and returns the same status fields as `GET /api/knowledge`. A successful rebuild atomically replaces the existing in-memory store. This is optional before the first question because RAG prepares a missing index automatically. Use it to refresh an existing index when notes or embedding configuration change:
+
+```bash
+curl -X POST http://localhost:8080/api/knowledge/index
+```
 
 ## Run tests
 
@@ -106,10 +225,19 @@ mvn test
 
 ## Important limitations
 
-- The tutor is an LLM, so its answers can be incorrect or out of date. Verify important claims.
-- Chat memory uses an in-memory repository. It is bounded, local to the running app process, lost on restart, and not a production persistence or multi-user deployment solution.
-- The app has no document retrieval or external tools. The tutor cannot access private data or take actions.
-- Multimodal prompts, provider switching, and structured-output conversion are educational examples only; the interactive chat currently streams text from one local Ollama model.
-- The active chat uses the memory advisor; other advisor-chain examples (such as logging, safety, retrieval, and recursive validation) are educational only.
-- Live responses require the Ollama service and model to be available locally. Model inference consumes local compute resources.
-- Prompts are limited to 2,000 characters; this is a small demo, not a production security boundary or cost-control system.
+- Model-generated answers can be incorrect or out of date. Retrieved context reduces a knowledge gap but does not guarantee accuracy.
+- The vector index and chat memory are process-local and lost on restart. They are learning examples rather than durable, shared storage.
+- RAG searches only bundled learning notes. There is no arbitrary file upload, PDF ingestion, external vector database, or live web search.
+- Topic metadata filtering is implemented. Arbitrary filters, query rewriting, expansion, reranking, hybrid search, and the modular RAG advisor remain educational examples.
+- Retrieval searches the current message without rewriting it from chat history. Restate the topic in follow-up questions when needed.
+- Tools are limited to the explicitly registered read-only methods. The model cannot independently execute arbitrary Java, access private systems, or take external actions.
+- Models vary in tool-calling support and reliability. Use a compatible model for tools mode.
+- Multimodal input, provider switching, structured-output conversion, and recursive validation remain illustrative examples.
+- Chat prompts are limited to 2,000 characters. This local demo does not implement production authentication, authorization, indexing access controls, or rate limiting.
+
+## Further reading
+
+- [Spring AI RAG reference](https://docs.spring.io/spring-ai/reference/api/retrieval-augmented-generation.html)
+- [Spring AI tool calling reference](https://docs.spring.io/spring-ai/reference/api/tools.html)
+- [Spring AI vector store reference](https://docs.spring.io/spring-ai/reference/api/vectordbs.html)
+- [Spring AI ETL pipeline reference](https://docs.spring.io/spring-ai/reference/api/etl-pipeline.html)

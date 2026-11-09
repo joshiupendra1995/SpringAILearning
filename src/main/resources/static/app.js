@@ -2,6 +2,58 @@ const form = document.querySelector("#chat-form");
 const input = document.querySelector("#chat-input");
 const messages = document.querySelector("#chat-messages");
 const sendButton = form.querySelector("button");
+const modeSelect = document.querySelector("#chat-mode");
+const ragTopicSelect = document.querySelector("#rag-topic");
+const ragTopicControls = document.querySelector("#rag-topic-controls");
+const indexButton = document.querySelector("#index-knowledge");
+const knowledgeStatus = document.querySelector("#knowledge-status");
+const modeHelp = document.querySelector("#mode-help");
+const newChatButton = document.querySelector("#new-chat");
+const tutorStatus = document.querySelector(".tutor-status");
+const modeHistory = new Map();
+let activeMode = modeSelect.value;
+let knowledgeIndexed = false;
+
+const modeDescriptions = {
+  tutor: "Ask freely with session memory. No retrieval or tools are used in this mode.",
+  rag: "Answers search the learning notes. The first question prepares the index automatically; Ollama and nomic-embed-text must be available.",
+  tools: "The model can request the current time or lesson outlines. Requires a tool-capable model such as llama3.1."
+};
+
+const modeSuggestions = {
+  tutor: ["What is a token?", "Why are LLMs stateless?", "Where does Spring AI help?"],
+  rag: ["Why should I split documents into chunks?", "How do embeddings find related text?", "How is RAG different from tool calling?"],
+  tools: ["What is the current date and time?", "Look up the rag lesson outline", "Look up the tools lesson outline"]
+};
+
+function updateModeHelp() {
+  modeHelp.textContent = modeDescriptions[activeMode];
+  ragTopicControls.hidden = activeMode !== "rag";
+  tutorStatus.lastChild.textContent = activeMode === "rag"
+    ? " RAG · local Ollama"
+    : activeMode === "tools" ? " Java tools · local Ollama" : " General tutor · no retrieval";
+  input.placeholder = activeMode === "rag" ? "Ask the learning notes…" : "Message your AI tutor…";
+  document.querySelectorAll(".suggestion").forEach((button, index) => {
+    button.textContent = modeSuggestions[activeMode][index];
+  });
+}
+
+function showKnowledgeStatus(status) {
+  knowledgeIndexed = status.indexed;
+  knowledgeStatus.textContent = status.indexed
+    ? `${status.documentCount} notes · ${status.chunkCount} chunks · ${status.embeddingModel}`
+    : `Notes prepare automatically on your first question · ${status.embeddingModel}`;
+}
+
+async function refreshKnowledgeStatus() {
+  try {
+    const response = await fetch("/api/knowledge");
+    if (!response.ok) throw new Error("Could not read knowledge status.");
+    showKnowledgeStatus(await response.json());
+  } catch {
+    knowledgeStatus.textContent = "Knowledge status unavailable. Check that the app is running.";
+  }
+}
 
 function addMessage(text, kind) {
   const message = document.createElement("div");
@@ -48,12 +100,19 @@ function handleServerEvent(frame, assistantMessage) {
 async function askTutor(question) {
   const trimmedQuestion = question.trim();
   if (!trimmedQuestion || sendButton.disabled) return;
+  const requestMode = activeMode;
 
   addMessage(trimmedQuestion, "user");
   input.value = "";
   input.style.height = "auto";
   sendButton.disabled = true;
-  const pendingMessage = addMessage("Thinking through that…", "assistant typing");
+  modeSelect.disabled = true;
+  ragTopicSelect.disabled = true;
+  newChatButton.disabled = true;
+  const pendingText = requestMode === "rag"
+    ? knowledgeIndexed ? "Searching the learning notes…" : "Preparing notes and searching…"
+    : "Thinking through that…";
+  const pendingMessage = addMessage(pendingText, "assistant typing");
 
   try {
     const response = await fetch("/api/chat", {
@@ -62,7 +121,11 @@ async function askTutor(question) {
         "Content-Type": "application/json",
         "Accept": "text/event-stream"
       },
-      body: JSON.stringify({ message: trimmedQuestion })
+      body: JSON.stringify({
+        message: trimmedQuestion,
+        mode: activeMode,
+        ...(activeMode === "rag" ? { topic: ragTopicSelect.value } : {})
+      })
     });
     if (!response.ok) {
       pendingMessage.remove();
@@ -100,7 +163,11 @@ async function askTutor(question) {
     pendingMessage.remove();
     addMessage("The chat stream was interrupted. Check that the Spring AI app and Ollama are running, then try again.", "error");
   } finally {
+    if (requestMode === "rag") void refreshKnowledgeStatus();
     sendButton.disabled = false;
+    modeSelect.disabled = false;
+    ragTopicSelect.disabled = false;
+    newChatButton.disabled = false;
     input.focus();
   }
 }
@@ -119,11 +186,13 @@ document.querySelectorAll(".suggestion").forEach((button) => {
   button.addEventListener("click", () => askTutor(button.textContent));
 });
 
-document.querySelector("#new-chat").addEventListener("click", async () => {
+newChatButton.addEventListener("click", async () => {
   if (sendButton.disabled) return;
 
-  const newChatButton = document.querySelector("#new-chat");
   newChatButton.disabled = true;
+  sendButton.disabled = true;
+  modeSelect.disabled = true;
+  ragTopicSelect.disabled = true;
   try {
     const response = await fetch("/api/chat", { method: "DELETE" });
     if (!response.ok) {
@@ -132,7 +201,10 @@ document.querySelector("#new-chat").addEventListener("click", async () => {
     }
 
     messages.replaceChildren();
-    addMessage("New conversation started. What would you like to learn?", "assistant");
+    modeHistory.clear();
+    addMessage(activeMode === "rag"
+      ? "New conversation started. I’ll search the learning notes for your next question."
+      : "New conversation started. What would you like to learn?", "assistant");
     input.value = "";
     input.style.height = "auto";
     input.focus();
@@ -140,5 +212,40 @@ document.querySelector("#new-chat").addEventListener("click", async () => {
     addMessage("Could not reach the Spring AI app. Check that it is running, then try again.", "error");
   } finally {
     newChatButton.disabled = false;
+    sendButton.disabled = false;
+    modeSelect.disabled = false;
+    ragTopicSelect.disabled = false;
   }
 });
+
+modeSelect.addEventListener("change", () => {
+  modeHistory.set(activeMode, Array.from(messages.children));
+  activeMode = modeSelect.value;
+  messages.replaceChildren(...(modeHistory.get(activeMode) || []));
+  if (!messages.children.length) {
+    addMessage(modeDescriptions[activeMode], "assistant");
+  }
+  updateModeHelp();
+  input.focus();
+});
+
+indexButton.addEventListener("click", async () => {
+  indexButton.disabled = true;
+  knowledgeStatus.textContent = "Indexing learning notes… This may take a moment while the embedding model loads.";
+  try {
+    const response = await fetch("/api/knowledge/index", { method: "POST" });
+    const result = await response.json();
+    if (!response.ok) {
+      knowledgeStatus.textContent = result.error || "Indexing failed. Check Ollama and the embedding model.";
+      return;
+    }
+    showKnowledgeStatus(result);
+  } catch {
+    knowledgeStatus.textContent = "Could not reach the app to index the notes. Please try again.";
+  } finally {
+    indexButton.disabled = false;
+  }
+});
+
+updateModeHelp();
+void refreshKnowledgeStatus();
