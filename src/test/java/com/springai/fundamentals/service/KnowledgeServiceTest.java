@@ -322,6 +322,21 @@ class KnowledgeServiceTest {
     }
 
     @Test
+    void indexesAiTestingLessonUnderSpringAiTopic() throws IOException {
+        when(resources.getResources(RESOURCE_PATTERN)).thenReturn(new Resource[] {
+                note("testing-ai-applications.txt", "ALPHA explains testing AI applications.")
+        });
+        KnowledgeService service = service(3, 0.95);
+        service.index();
+
+        List<Document> matches = search(service.retrieval(RagTopic.SPRING_AI), "ALPHA");
+
+        assertEquals(1, matches.size());
+        assertEquals("spring-ai", matches.getFirst().getMetadata().get("topic"));
+        assertEquals("testing-ai-applications.txt", matches.getFirst().getMetadata().get("source"));
+    }
+
+    @Test
     void topicFilteringStillHonorsTopKAndSimilarityThreshold() throws IOException {
         when(resources.getResources(RESOURCE_PATTERN)).thenReturn(new Resource[] {
                 note("rag-foundations.txt", "ALPHA is an exact matching note about retrieval foundations."),

@@ -59,7 +59,7 @@ public class LearningTools {
                     + "generative AI, tokens, context windows, model parameters, hallucinations, and training cutoffs.";
             case "spring-ai" -> "Spring AI: ChatModel and ChatClient, provider starters and BOM, prompts and message "
                     + "roles, PromptTemplate, model options, response metadata, streaming, multimodal input, "
-                    + "and structured output.";
+                    + "structured output, and testing AI applications with mocked models and evaluators.";
             case "advisors" -> "Advisors: request and response interception, ordering, shared context, bounded "
                     + "session chat memory, conversation IDs, and bounded validation retries.";
             case "rag" -> "Retrieval augmented generation: embeddings, matching model and dimensions, vector "

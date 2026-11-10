@@ -6,6 +6,7 @@ An interactive learning app for modern AI concepts and the Spring AI programming
 
 - **AI fundamentals:** the AI → machine learning → deep learning → generative AI relationship, how LLMs generate text, tokens, context windows, hallucinations, and training cutoffs.
 - **Spring AI lessons:** `ChatModel` versus `ChatClient`, provider configuration, prompts and message roles, templates, model options, response metadata, streaming, multimodal input, structured output, and advisors.
+- **Testing AI applications:** deterministic tests with mocked models, evaluator contract tests, and an opt-in suite that evaluates real RAG answers for relevance and factual support. The lessons also explain separate infrastructure checks with Testcontainers.
 - **RAG lessons:** embeddings, vector dimensions, similarity search, top K, similarity thresholds, metadata filters, and the extract → transform → load indexing pipeline. Advanced examples introduce query rewriting, routing, hybrid search, reranking, and context compression.
 - **Spring AI RAG APIs:** `EmbeddingModel`, `Document`, `VectorStore`, `SearchRequest`, the ETL interfaces, `QuestionAnswerAdvisor`, custom context templates, and the modular `RetrievalAugmentationAdvisor`.
 - **Tool-calling lessons:** tool descriptions and generated schemas, the model/application execution loop, argument validation, and application-controlled context through `ToolContext`.
@@ -17,7 +18,7 @@ An interactive learning app for modern AI concepts and the Spring AI programming
 - **Reactive streaming:** `ChatClient` streaming responses feed Server-Sent Events to the browser. The interface displays text incrementally and renders conversation content as text rather than HTML.
 - **Input validation:** chat requests reject blank messages and messages longer than 2,000 characters; tool arguments are validated in Java.
 
-Some lesson snippets are illustrative: multimodal prompts, structured-output conversion, non-text document readers, metadata enrichers, modular RAG pipelines, and action-taking tools are not wired into the interactive chat.
+Some lesson snippets are illustrative: multimodal prompts, structured-output conversion, non-text document readers, metadata enrichers, modular RAG pipelines, action-taking tools, and Testcontainers test setups are not wired into the interactive chat or default test suite. LLM-judge evaluations are executable through the opt-in test profile described below; they do not run during ordinary chat requests.
 
 ## Architecture
 
@@ -355,11 +356,52 @@ Explicitly rebuilds the bundled learning notes using the configured embedding mo
 curl -X POST http://localhost:8080/api/knowledge/index
 ```
 
+## Testing AI applications
+
+The learning section at the end of the app separates three test tiers:
+
+- **Deterministic unit tests:** mock `ChatModel` and `VectorStore` dependencies to verify application behavior such as prompts, retrieval requests, advisor decisions, and tool handling. These should be the fast tests run most often.
+- **Answer evaluation:** the opt-in `RagAnswerEvaluationTest` uses Spring AI's `RelevancyEvaluator` and `FactCheckingEvaluator` with a real judge model. It assesses real RAG answers against their question and retrieved `Document` context, with unrelated-answer and unsupported-claim negative controls. Evaluate relevance and factual support separately; avoid exact-string assertions on live generated text.
+- **Infrastructure integration:** Testcontainers and supported Spring service connections can run real models and stores in disposable infrastructure. Keep these slower tests in a dedicated integration or release tier.
+
+The first two tiers are implemented. Testcontainers remains an infrastructure example rather than an active test setup. Exact-text assertions are useful for fixed mock responses and application messages; they are brittle for unconstrained live model output.
+
+An `EvaluationRequest` contains the original question (`userText`), supporting documents (`dataList`), and generated answer (`responseContent`). `EvaluationResponse.isPass()` reports the evaluator's verdict. The relevance evaluator uses a custom `PromptTemplate` containing all three required placeholders: `{query}`, `{response}`, and `{context}`. The factual-support evaluator uses `{document}` and `{claim}` and asks for a strict YES or NO verdict. Deterministic evaluator contract tests check this prompt wiring and verdict parsing without calling a real model.
+
+The real-model tests call `ChatService.answerWithContext(...)`, which runs the same RAG advisor chain as the streaming chat. It returns a `RagAnswer` with the full answer and the exact documents from `QuestionAnswerAdvisor.RETRIEVED_DOCUMENTS` in that response's advisor context. Evaluation uses those documents without running another search, and excludes the application-added source-filename suffix from the judged answer. The lesson also shows the optional modular advisor's `RetrievalAugmentationAdvisor.DOCUMENT_CONTEXT` metadata key; that is a different advisor contract.
+
+The judge has its own `ChatClient.Builder`, without the answer client's RAG or conversation-memory advisors. Its model can differ from the answer model. A judge verdict is evidence rather than proof: judges can disagree, and relevance and groundedness need both positive and negative examples. Failures show the raw verdict and generated answer; an invalid verdict also fails negative controls rather than counting as a successful rejection. Inspect the answer, retrieved evidence, and judge configuration before deciding which part needs improvement. Keep the judge settings stable and review failures rather than repeatedly rerunning until a test happens to pass. See the [Spring AI evaluation reference](https://docs.spring.io/spring-ai/reference/api/testing.html).
+
 ## Run tests
+
+The regular suite uses mocks and does not run a real LLM judge or require a running Ollama service or Docker. It checks deterministic application behavior such as prompts, retrieval requests, advisor outcomes, tool execution, API responses, and the evaluator contracts. Tests tagged `ai-evaluation` are excluded by default.
 
 ```bash
 mvn test
 ```
+
+### Run real-model evaluations
+
+Keep Ollama running, then install the models used for answers, embeddings, and judging:
+
+```bash
+ollama pull llama3:latest
+ollama pull nomic-embed-text
+ollama pull llama3.1:latest
+mvn -Pai-evaluation verify
+```
+
+This profile selects only the tests tagged `ai-evaluation`. Run `mvn test` separately for the deterministic suite. The real-model tests prepare the learning-note index, generate answers through the application's RAG path, and make separate judge calls. They can take several minutes while models load and use local inference resources. The tests do not download models or start Ollama; explicitly requesting this profile fails with a setup error if the required service or models are unavailable, rather than silently skipping the checks.
+
+| Setting | Default | Evaluation role |
+| --- | --- | --- |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama endpoint for all models |
+| `OLLAMA_CHAT_MODEL` | `llama3:latest` | Generates the RAG answer |
+| `OLLAMA_EMBEDDING_MODEL` | `nomic-embed-text` | Embeds learning notes and questions |
+| `OLLAMA_JUDGE_MODEL` | `llama3.1:latest` | Judges relevance and factual support |
+| `OLLAMA_RESPONSE_TIMEOUT` | `5m` | Allows time for local model loading and calls |
+
+For example, reuse the installed answer model for separate judging calls with `OLLAMA_JUDGE_MODEL=llama3:latest mvn -Pai-evaluation verify`, or select a different installed judge. Results appear in Maven's test summary and `target/surefire-reports`, including reports for `RagAnswerEvaluationTest`. The judge configuration belongs to test support; it does not change the chat application's model or enable evaluation during normal requests.
 
 ## Important limitations
 

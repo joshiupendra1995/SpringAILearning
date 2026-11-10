@@ -1,5 +1,6 @@
 package com.springai.fundamentals.service;
 
+import com.springai.fundamentals.model.RagAnswer;
 import com.springai.fundamentals.model.RagTopic;
 import com.springai.fundamentals.tool.LearningTools;
 import java.time.Duration;
@@ -27,12 +28,15 @@ import org.springframework.core.io.support.ResourcePatternResolver;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
@@ -156,6 +160,92 @@ class ChatServiceTest {
                 .expectNext("First ", "second.", "\n\nRetrieved sources: notes.txt")
                 .verifyComplete();
         verify(vectorStore).similaritySearch(any(SearchRequest.class));
+    }
+
+    @Test
+    void collectsTheCompleteAnswerWithTheSameRetrievedEvidenceAndNoSourceSuffix() {
+        Document note = document("Chunks focus retrieval on relevant passages.", "chunking.txt");
+        when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of(note));
+        when(chatModel.stream(any(Prompt.class))).thenReturn(Flux.just(
+                new ChatResponse(List.of()),
+                new ChatResponse(List.of(new Generation(new AssistantMessage("Focused chunks ")))),
+                new ChatResponse(List.of(new Generation(new AssistantMessage("improve retrieval."))))));
+
+        RagAnswer result = chatService.answerWithContext("Why chunk documents?", "evaluation-a", RagTopic.ALL)
+                .block(Duration.ofSeconds(5));
+
+        assertEquals("Why chunk documents?", result.question());
+        assertEquals("Focused chunks improve retrieval.", result.answer());
+        assertEquals(List.of(note), result.retrievedDocuments());
+        assertSame(note, result.retrievedDocuments().getFirst());
+        assertThrows(UnsupportedOperationException.class, () -> result.retrievedDocuments().clear());
+        Prompt prompt = capturedPrompts(1).getFirst();
+        assertTrue(prompt.getUserMessage().getText().contains(note.getText()));
+        verify(vectorStore).similaritySearch(any(SearchRequest.class));
+    }
+
+    @Test
+    void returnsEmptyEvidenceWithTheNoMatchRefusalWithoutCallingTheModel() {
+        when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of());
+
+        RagAnswer result = chatService.answerWithContext("What is the weather?", "evaluation-a", RagTopic.ALL)
+                .block(Duration.ofSeconds(5));
+
+        assertTrue(result.answer().contains("couldn't find relevant information"));
+        assertTrue(result.retrievedDocuments().isEmpty());
+        verify(chatModel, never()).stream(any(Prompt.class));
+        verify(vectorStore).similaritySearch(any(SearchRequest.class));
+    }
+
+    @Test
+    void appliesTheTopicFilterWhenCollectingAnAnswerForEvaluation() {
+        var filter = new FilterExpressionBuilder().eq("topic", "tools").build();
+        when(knowledgeService.retrieval(RagTopic.TOOLS)).thenReturn(new KnowledgeService.Retrieval(
+                vectorStore, SearchRequest.builder().topK(3).similarityThreshold(0.45)
+                        .filterExpression(filter).build()));
+        Document note = document("Java executes model-requested tools.", "tools.txt");
+        when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of(note));
+
+        RagAnswer result = chatService.answerWithContext("Who executes tools?", "evaluation-a", RagTopic.TOOLS)
+                .block(Duration.ofSeconds(5));
+
+        assertEquals(List.of(note), result.retrievedDocuments());
+        ArgumentCaptor<SearchRequest> search = ArgumentCaptor.forClass(SearchRequest.class);
+        verify(vectorStore).similaritySearch(search.capture());
+        assertEquals("Who executes tools?", search.getValue().getQuery());
+        assertEquals(filter, search.getValue().getFilterExpression());
+    }
+
+    @Test
+    void keepsAnswerAndEvidenceIndependentForEachSubscription() {
+        Document firstNote = document("First evidence.", "first.txt");
+        Document secondNote = document("Second evidence.", "second.txt");
+        when(vectorStore.similaritySearch(any(SearchRequest.class)))
+                .thenReturn(List.of(firstNote)).thenReturn(List.of(secondNote));
+        when(chatModel.stream(any(Prompt.class)))
+                .thenReturn(Flux.just(new ChatResponse(List.of(new Generation(new AssistantMessage("First answer."))))))
+                .thenReturn(Flux.just(new ChatResponse(List.of(new Generation(new AssistantMessage("Second answer."))))));
+        Mono<RagAnswer> request = chatService.answerWithContext("Explain this", "evaluation-a", RagTopic.ALL);
+
+        RagAnswer first = request.block(Duration.ofSeconds(5));
+        RagAnswer second = request.block(Duration.ofSeconds(5));
+
+        assertEquals("First answer.", first.answer());
+        assertEquals(List.of(firstNote), first.retrievedDocuments());
+        assertEquals("Second answer.", second.answer());
+        assertEquals(List.of(secondNote), second.retrievedDocuments());
+        verify(vectorStore, times(2)).similaritySearch(any(SearchRequest.class));
+    }
+
+    @Test
+    void propagatesAnEmptyModelStreamFailureRatherThanInventingEvidence() {
+        when(vectorStore.similaritySearch(any(SearchRequest.class)))
+                .thenReturn(List.of(document("A relevant note.", "notes.txt")));
+        when(chatModel.stream(any(Prompt.class))).thenReturn(Flux.empty());
+
+        StepVerifier.create(chatService.answerWithContext("Explain this", "evaluation-a", RagTopic.ALL))
+                .expectError()
+                .verify();
     }
 
     @Test

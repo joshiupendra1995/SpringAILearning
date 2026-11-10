@@ -1,6 +1,7 @@
 package com.springai.fundamentals.service;
 
 import com.springai.fundamentals.advisor.RagGroundingAdvisor;
+import com.springai.fundamentals.model.RagAnswer;
 import com.springai.fundamentals.model.RagTopic;
 import com.springai.fundamentals.tool.LearningTools;
 import java.io.IOException;
@@ -11,6 +12,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
 import org.springframework.ai.chat.client.advisor.vectorstore.QuestionAnswerAdvisor;
 import org.springframework.ai.chat.memory.ChatMemory;
@@ -21,6 +23,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 @Slf4j
@@ -48,6 +51,10 @@ public class ChatService {
             rewriting, routing, hybrid search, reranking, and compression. Explain tool calling
             as model requests executed by application code, including descriptions, argument
             validation, the tool execution loop, and trusted application-injected ToolContext.
+            Explain testing AI applications by separating deterministic code tests with mocked
+            ChatModel instances from probabilistic answer evaluation with Spring AI evaluators.
+            Explain relevance and factual grounding as different answer properties, and note
+            that evaluator and Testcontainers integration tests are slower optional tiers.
             This app offers separate RAG and tools modes. RAG searches bundled notes in an
             in-memory vector store; tools mode exposes read-only time and lesson-outline tools.
             In this tutor mode no documents are retrieved and no tools are registered.
@@ -135,41 +142,83 @@ public class ChatService {
     }
 
     private Flux<String> streamGroundedAnswer(String message, String conversationId, RagTopic topic) {
-        try {
-            knowledgeService.ensureIndexed();
-        } catch (IOException | RuntimeException exception) {
-            log.warn("Could not prepare the learning notes for RAG chat.", exception);
-            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
-                    "Could not prepare the learning notes. Make sure Ollama is running and the configured "
-                            + "embedding model is installed (default: ollama pull nomic-embed-text), then retry.");
-        }
-        KnowledgeService.Retrieval retrieval = knowledgeService.retrieval(topic);
-        QuestionAnswerAdvisor ragAdvisor = QuestionAnswerAdvisor.builder(retrieval.vectorStore())
-                .searchRequest(retrieval.searchRequest())
-                .promptTemplate(RAG_PROMPT_TEMPLATE)
-                .order(0)
-                .build();
         AtomicReference<String> sources = new AtomicReference<>("");
-
-        return prompt(message, conversationId, "rag", RAG_SYSTEM_PROMPT)
-                .advisors(ragAdvisor, new RagGroundingAdvisor())
-                .stream()
-                .chatClientResponse()
+        return streamRagResponses(message, conversationId, topic)
                 .<String>handle((response, sink) -> {
-                    if (response.context().get(QuestionAnswerAdvisor.RETRIEVED_DOCUMENTS) instanceof List<?> documents) {
-                        sources.set(documents.stream().map(Document.class::cast)
-                                .map(document -> String.valueOf(document.getMetadata().get("source")))
-                                .distinct().collect(Collectors.joining(", ")));
-                    }
-                    if (response.chatResponse() != null && response.chatResponse().getResult() != null) {
-                        String text = response.chatResponse().getResult().getOutput().getText();
-                        if (text != null && !text.isEmpty()) {
-                            sink.next(text);
-                        }
+                    sources.set(retrievedDocuments(response).stream()
+                            .map(document -> String.valueOf(document.getMetadata().get("source")))
+                            .distinct().collect(Collectors.joining(", ")));
+                    String text = responseText(response);
+                    if (!text.isEmpty()) {
+                        sink.next(text);
                     }
                 })
                 .concatWith(Flux.defer(() -> sources.get().isEmpty()
                         ? Flux.empty() : Flux.just("\n\nRetrieved sources: " + sources.get())));
+    }
+
+    /** Collects the real RAG output and its original evidence for answer evaluation. */
+    public Mono<RagAnswer> answerWithContext(String question, String conversationId, RagTopic topic) {
+        return streamRagResponses(question, conversationId, topic)
+                .collect(RagAnswerAccumulator::new, RagAnswerAccumulator::append)
+                .map(answer -> answer.result(question));
+    }
+
+    private Flux<ChatClientResponse> streamRagResponses(String message, String conversationId, RagTopic topic) {
+        return Flux.defer(() -> {
+            try {
+                knowledgeService.ensureIndexed();
+            } catch (IOException | RuntimeException exception) {
+                log.warn("Could not prepare the learning notes for RAG chat.", exception);
+                throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                        "Could not prepare the learning notes. Make sure Ollama is running and the configured "
+                                + "embedding model is installed (default: ollama pull nomic-embed-text), then retry.");
+            }
+            KnowledgeService.Retrieval retrieval = knowledgeService.retrieval(topic);
+            QuestionAnswerAdvisor ragAdvisor = QuestionAnswerAdvisor.builder(retrieval.vectorStore())
+                    .searchRequest(retrieval.searchRequest())
+                    .promptTemplate(RAG_PROMPT_TEMPLATE)
+                    .order(0)
+                    .build();
+            return prompt(message, conversationId, "rag", RAG_SYSTEM_PROMPT)
+                    .advisors(ragAdvisor, new RagGroundingAdvisor())
+                    .stream()
+                    .chatClientResponse();
+        }).subscribeOn(Schedulers.boundedElastic());
+    }
+
+    private static List<Document> retrievedDocuments(ChatClientResponse response) {
+        Object evidence = response.context().get(QuestionAnswerAdvisor.RETRIEVED_DOCUMENTS);
+        if (!(evidence instanceof List<?> documents)
+                || documents.stream().anyMatch(document -> !(document instanceof Document))) {
+            throw new IllegalStateException("RAG response did not include valid retrieved documents.");
+        }
+        return documents.stream().map(Document.class::cast).toList();
+    }
+
+    private static String responseText(ChatClientResponse response) {
+        if (response.chatResponse() == null || response.chatResponse().getResult() == null) {
+            return "";
+        }
+        String text = response.chatResponse().getResult().getOutput().getText();
+        return text == null ? "" : text;
+    }
+
+    private static final class RagAnswerAccumulator {
+        private final StringBuilder content = new StringBuilder();
+        private List<Document> documents;
+
+        private void append(ChatClientResponse response) {
+            documents = retrievedDocuments(response);
+            content.append(responseText(response));
+        }
+
+        private RagAnswer result(String question) {
+            if (documents == null) {
+                throw new IllegalStateException("RAG completed without a response containing retrieved evidence.");
+            }
+            return new RagAnswer(question, content.toString(), documents);
+        }
     }
 
     private ChatClient.ChatClientRequestSpec prompt(

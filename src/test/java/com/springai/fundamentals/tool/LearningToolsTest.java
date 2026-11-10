@@ -43,6 +43,7 @@ class LearningToolsTest {
     void looksUpOnlySupportedLessonTopics() {
         assertTrue(tools.getLessonOutline(" fundamentals ").contains("tokens"));
         assertTrue(tools.getLessonOutline("SPRING-AI").contains("ChatClient"));
+        assertTrue(tools.getLessonOutline("spring-ai").contains("testing AI applications"));
         assertTrue(tools.getLessonOutline("advisors").contains("conversation IDs"));
         assertTrue(tools.getLessonOutline("rag").contains("embeddings"));
         assertTrue(tools.getLessonOutline("tools").contains("ToolContext"));
