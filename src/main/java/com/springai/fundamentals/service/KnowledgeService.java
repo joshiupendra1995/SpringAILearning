@@ -2,6 +2,8 @@ package com.springai.fundamentals.service;
 
 import com.springai.fundamentals.model.KnowledgeStatus;
 import com.springai.fundamentals.model.RagTopic;
+import com.springai.fundamentals.observation.PrivacyPreservingVectorStoreObservationConvention;
+import io.micrometer.observation.ObservationRegistry;
 import java.io.IOException;
 import java.time.Instant;
 import java.util.*;
@@ -16,6 +18,7 @@ import org.springframework.ai.vectorstore.SimpleVectorStore;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.ai.vectorstore.filter.FilterExpressionBuilder;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.support.ResourcePatternResolver;
 import org.springframework.http.HttpStatus;
@@ -27,6 +30,7 @@ public class KnowledgeService {
 
     private final EmbeddingModel embeddingModel;
     private final ResourcePatternResolver resourceResolver;
+    private final ObservationRegistry observationRegistry;
     private final String embeddingModelName;
     private final int topK;
     private final double similarityThreshold;
@@ -34,7 +38,9 @@ public class KnowledgeService {
     private CompletableFuture<KnowledgeStatus> inFlightIndex;
     private volatile IndexSnapshot snapshot;
 
+    @Autowired
     public KnowledgeService(EmbeddingModel embeddingModel, ResourcePatternResolver resourceResolver,
+            ObservationRegistry observationRegistry,
             @Value("${spring.ai.ollama.embedding.model:nomic-embed-text}") String embeddingModelName,
             @Value("${app.rag.top-k:3}") int topK,
             @Value("${app.rag.similarity-threshold:0.45}") double similarityThreshold) {
@@ -44,6 +50,7 @@ public class KnowledgeService {
         }
         this.embeddingModel = embeddingModel;
         this.resourceResolver = resourceResolver;
+        this.observationRegistry = Objects.requireNonNull(observationRegistry);
         this.embeddingModelName = embeddingModelName;
         this.topK = topK;
         this.similarityThreshold = similarityThreshold;
@@ -108,7 +115,10 @@ public class KnowledgeService {
                     .withMinChunkLengthToEmbed(30)
                     .build()
                     .split(documents);
-            SimpleVectorStore replacement = SimpleVectorStore.builder(embeddingModel).build();
+            SimpleVectorStore replacement = SimpleVectorStore.builder(embeddingModel)
+                    .observationRegistry(observationRegistry)
+                    .customObservationConvention(new PrivacyPreservingVectorStoreObservationConvention())
+                    .build();
             replacement.add(chunks);
             KnowledgeStatus status = new KnowledgeStatus(
                     true, documents.size(), chunks.size(), embeddingModelName, Instant.now());
@@ -173,7 +183,7 @@ public class KnowledgeService {
     private String topicFor(String filename) {
         return switch (filename) {
             case "tool-calling.txt" -> "tools";
-            case "spring-ai-app.txt", "testing-ai-applications.txt" -> "spring-ai";
+            case "spring-ai-app.txt", "testing-ai-applications.txt", "observability.txt" -> "spring-ai";
             default -> "rag";
         };
     }

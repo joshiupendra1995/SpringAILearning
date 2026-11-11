@@ -55,6 +55,12 @@ public class ChatService {
             ChatModel instances from probabilistic answer evaluation with Spring AI evaluators.
             Explain relevance and factual grounding as different answer properties, and note
             that evaluator and Testcontainers integration tests are slower optional tiers.
+            Explain Micrometer observations and Spring Boot Actuator, metrics versus traces,
+            low- versus high-cardinality attributes, AI and vector-store latency, provider token
+            usage, and W3C trace propagation. This app exposes local management endpoints for
+            metrics and Prometheus, optionally exports traces using the tracing profile, and
+            keeps prompt/completion/tool/document content logging off unless explicitly enabled.
+            Its vector-store convention omits query text and filters from trace attributes.
             This app offers separate RAG and tools modes. RAG searches bundled notes in an
             in-memory vector store; tools mode exposes read-only time and lesson-outline tools.
             In this tutor mode no documents are retrieved and no tools are registered.

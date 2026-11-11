@@ -3,6 +3,7 @@ package com.springai.fundamentals.service;
 import com.springai.fundamentals.model.RagAnswer;
 import com.springai.fundamentals.model.RagTopic;
 import com.springai.fundamentals.tool.LearningTools;
+import io.micrometer.observation.ObservationRegistry;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -85,7 +86,7 @@ class ChatServiceTest {
     @Test
     void reportsAnUnindexedKnowledgeBaseWithoutCallingTheModel() {
         KnowledgeService unindexed = new KnowledgeService(mock(EmbeddingModel.class),
-                mock(ResourcePatternResolver.class), "test-embedding-model", 3, 0.45);
+                mock(ResourcePatternResolver.class), ObservationRegistry.NOOP, "test-embedding-model", 3, 0.45);
         ChatService service = createService(unindexed);
 
         StepVerifier.create(service.stream("What is RAG?", "session-a", "rag"))

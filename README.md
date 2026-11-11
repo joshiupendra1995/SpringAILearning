@@ -7,6 +7,7 @@ An interactive learning app for modern AI concepts and the Spring AI programming
 - **AI fundamentals:** the AI → machine learning → deep learning → generative AI relationship, how LLMs generate text, tokens, context windows, hallucinations, and training cutoffs.
 - **Spring AI lessons:** `ChatModel` versus `ChatClient`, provider configuration, prompts and message roles, templates, model options, response metadata, streaming, multimodal input, structured output, and advisors.
 - **Testing AI applications:** deterministic tests with mocked models, evaluator contract tests, and an opt-in suite that evaluates real RAG answers for relevance and factual support. The lessons also explain separate infrastructure checks with Testcontainers.
+- **Observability:** Actuator and Prometheus expose HTTP and AI operation metrics; the optional tracing profile exports Micrometer spans through OpenTelemetry. The app shares its observation registry with manually constructed vector stores and Ollama HTTP clients, alongside auto-configured tool execution. Observation content logging remains opt-in.
 - **RAG lessons:** embeddings, vector dimensions, similarity search, top K, similarity thresholds, metadata filters, and the extract → transform → load indexing pipeline. Advanced examples introduce query rewriting, routing, hybrid search, reranking, and context compression.
 - **Spring AI RAG APIs:** `EmbeddingModel`, `Document`, `VectorStore`, `SearchRequest`, the ETL interfaces, `QuestionAnswerAdvisor`, custom context templates, and the modular `RetrievalAugmentationAdvisor`.
 - **Tool-calling lessons:** tool descriptions and generated schemas, the model/application execution loop, argument validation, and application-controlled context through `ToolContext`.
@@ -149,6 +150,8 @@ Spring AI's `MessageChatMemoryAdvisor` keeps bounded in-memory histories using t
 | Embedding model | Ollama, `nomic-embed-text` by default | Configurable | Document indexing and query vectors |
 | Knowledge storage | `SimpleVectorStore` | In-memory | Note text, metadata, and embeddings; rebuilt after restart |
 | Conversation storage | Spring AI chat memory | In-memory | Bounded, per-WebSession and per-mode history |
+| Metrics | Spring Boot Actuator, Micrometer, Prometheus registry | Spring Boot managed | HTTP and AI operation timing, counts, and reported token usage |
+| Tracing | Micrometer Tracing, OpenTelemetry with OTLP | Spring Boot managed | Correlated spans; collector export enabled by the `tracing` profile |
 
 ### Architectural decisions and boundaries
 
@@ -356,6 +359,113 @@ Explicitly rebuilds the bundled learning notes using the configured embedding mo
 curl -X POST http://localhost:8080/api/knowledge/index
 ```
 
+## Observability
+
+Spring AI records observations through Micrometer's `ObservationRegistry`. Actuator supplies the same registry to the application's HTTP handling and auto-configured AI components, including tool execution. This app also passes it explicitly to its manually constructed vector stores and Ollama HTTP clients. Metrics and tracing therefore follow the running chat and retrieval pipeline rather than only its HTTP endpoint. See the [Spring AI observability reference](https://docs.spring.io/spring-ai/reference/observability/index.html).
+
+### Inspect metrics locally
+
+The management server binds to `127.0.0.1:9090` by default, separately from the application on port 8080. `APP_MANAGEMENT_PORT` changes its port. Its exposed endpoints are `health`, `info`, `metrics`, and `prometheus`:
+
+```bash
+curl http://127.0.0.1:9090/actuator/health
+curl http://127.0.0.1:9090/actuator/metrics
+curl http://127.0.0.1:9090/actuator/prometheus
+```
+
+Send a question and let its event stream finish, then inspect the operations that ran:
+
+```bash
+curl -N http://localhost:8080/api/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"How do embeddings help search the learning notes?"}'
+
+curl http://127.0.0.1:9090/actuator/metrics/spring.ai.chat.client
+curl http://127.0.0.1:9090/actuator/metrics/gen_ai.client.operation
+curl http://127.0.0.1:9090/actuator/metrics/db.vector.client.operation
+```
+
+Meters are created when their operation runs. For example, a tool meter appears only after the model actually executes a tool in tools mode; selecting that mode alone is insufficient. A provider call that fails before returning usage may have a duration or error signal without token counts.
+
+| Observation or meter | What it helps explain |
+| --- | --- |
+| `http.server.requests` | Overall HTTP request latency and status |
+| `spring.ai.chat.client` | The application-facing `call()` or `stream()` operation |
+| `spring.ai.advisor` | Advisor execution, including downstream work in the chain |
+| `gen_ai.client.operation` | Chat or embedding provider calls, with operation and model dimensions |
+| `spring.ai.tool` | Tool execution name, type, and duration |
+| `db.vector.client.operation` | Vector-store additions, deletions, and searches |
+| `gen_ai.client.token.usage` | Reported model token usage by token type |
+
+Advisor durations include inner operations, so summing every timer or span double-counts nested work. Metrics aggregate many requests; a trace shows the parent/child operations for a particular request.
+
+Spring AI 2.0.1 emits token counters tagged `gen_ai.token.type` as `input`, `output`, and `total` when the provider supplies the corresponding usage values. Filter a series explicitly:
+
+```bash
+curl --get http://127.0.0.1:9090/actuator/metrics/gen_ai.client.token.usage \
+  --data-urlencode 'tag=gen_ai.token.type:input'
+```
+
+Use the total series or add input and output; do not add all three together. Tokens are a workload signal, not an invoice calculation. Ollama runs locally and does not bill this application per token. For a paid provider, estimating money also requires its model-specific pricing and any separate rates for cached tokens or other usage. Provider support determines whether embedding or streaming responses report counts at all.
+
+The Prometheus endpoint supplies scrape-ready text. For example, a Prometheus query for input-token growth is `sum(increase(gen_ai_client_token_usage_total{gen_ai_token_type="input"}[5m]))`. Prometheus normalizes metric and label names; the Actuator metrics endpoint retains Micrometer's dotted names. Metrics are available without starting Prometheus. See [Spring Boot metrics](https://docs.spring.io/spring-boot/4.0/reference/actuator/metrics.html).
+
+### Export request traces
+
+OTLP trace export is disabled by default, so the normal app does not require a collector. Local tracing context, log correlation IDs, and HTTP propagation remain active. To send spans to an OTLP/HTTP collector that you have already started, enable the `tracing` Spring profile:
+
+```bash
+SPRING_PROFILES_ACTIVE=tracing \
+OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://localhost:4318/v1/traces \
+mvn spring-boot:run
+```
+
+The profile uses `TRACING_SAMPLING_PROBABILITY`, defaulting to `1.0` for this local tracing exercise. The ordinary configuration samples `0.1`; metrics are not controlled by trace sampling. The profile enables `management.tracing.export.otlp.enabled` and configures `management.opentelemetry.tracing.export.otlp.endpoint`. The general tracing switch stays enabled so propagation works even while OTLP transport is disabled. OTLP metric and log push exporters remain disabled; Prometheus supplies metrics. The OTLP endpoint receives spans; viewing them requires a collector and a compatible trace backend. The application does not start either service.
+
+A completed RAG request can contain HTTP, ChatClient, memory and retrieval advisors, vector search, and model spans. First-use indexing adds document and embedding work before the normal query flow. Tools mode can show model → tool → model work; it does not use the RAG path. Trace and span IDs correlate application logs when tracing context is active.
+
+The Ollama HTTP clients participate in observation and tracing, and propagate W3C trace context to downstream HTTP services. You can supply an existing trace context when testing:
+
+```bash
+curl -N http://localhost:8080/api/chat \
+  -H 'Content-Type: application/json' \
+  -H 'traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' \
+  -d '{"message":"Explain the role of a vector store."}'
+```
+
+A propagated header connects downstream telemetry only when the receiving gateway or inference service also records and exports compatible spans. It does not make Ollama produce a trace UI. See [Spring Boot tracing](https://docs.spring.io/spring-boot/4.0/reference/actuator/tracing.html).
+
+### Control content logging and cardinality
+
+Low-cardinality dimensions, such as provider, operation, or tool name, are suitable for metrics and traces. Per-request values such as conversation IDs belong in trace detail, not new metric labels. This app also omits raw vector-query text and filter expressions from vector-store span attributes.
+
+Spring AI observation content is disabled by default on each surface. Enable only the debugging surface you need using application properties or the equivalent environment variables:
+
+```properties
+# The request seen by ChatClient, before advisor enrichment
+spring.ai.chat.client.observations.log-prompt=true
+spring.ai.chat.client.observations.log-completion=true
+
+# The provider-facing request, including memory and retrieved context
+spring.ai.chat.observations.log-prompt=true
+spring.ai.chat.observations.log-completion=true
+spring.ai.chat.observations.include-error-logging=true
+
+# Tool arguments/results and retrieved query documents
+spring.ai.tools.observations.include-content=true
+spring.ai.vectorstore.observations.log-query-response=true
+```
+
+These are debugging examples, not this app's defaults. For a deliberate local debugging session, the `ai-content-debug` Spring profile enables all of the switches above:
+
+```bash
+SPRING_PROFILES_ACTIVE=ai-content-debug mvn spring-boot:run
+```
+
+Use `SPRING_PROFILES_ACTIVE=tracing,ai-content-debug` to combine content debugging with trace export. The switches can expose user messages, retrieved notes, tool data, and provider error details in logs or spans. Tool descriptions and schemas remain observation metadata even when arguments and results are excluded. Comparing client-level and model-level prompt logs can reveal what the advisor chain added. Trace correlation is useful for finding those entries together; it does not remove their content sensitivity.
+
+If a meter is absent, first run the corresponding operation and wait for streaming to finish, then list `/actuator/metrics` to inspect the names present. If traces are absent, check the active profile, sampling probability, collector endpoint and backend, and completion of the request. Missing token series can mean the provider returned no usage. Leave content switches off when investigating latency or aggregate usage; timers and counters do not require the prompt text.
+
 ## Testing AI applications
 
 The learning section at the end of the app separates three test tiers:
@@ -421,3 +531,6 @@ For example, reuse the installed answer model for separate judging calls with `O
 - [Spring AI tool calling reference](https://docs.spring.io/spring-ai/reference/api/tools.html)
 - [Spring AI vector store reference](https://docs.spring.io/spring-ai/reference/api/vectordbs.html)
 - [Spring AI ETL pipeline reference](https://docs.spring.io/spring-ai/reference/api/etl-pipeline.html)
+- [Spring AI observability reference](https://docs.spring.io/spring-ai/reference/observability/index.html)
+- [Spring Boot metrics](https://docs.spring.io/spring-boot/4.0/reference/actuator/metrics.html)
+- [Spring Boot tracing](https://docs.spring.io/spring-boot/4.0/reference/actuator/tracing.html)

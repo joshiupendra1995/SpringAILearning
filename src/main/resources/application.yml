@@ -1,7 +1,24 @@
 spring:
   application:
     name: spring-ai-fundamentals
+  reactor:
+    context-propagation: auto
   ai:
+    chat:
+      client:
+        observations:
+          log-prompt: false
+          log-completion: false
+      observations:
+        log-prompt: false
+        log-completion: false
+        include-error-logging: false
+    tools:
+      observations:
+        include-content: false
+    vectorstore:
+      observations:
+        log-query-response: false
     ollama:
       base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
       chat:
@@ -21,6 +38,34 @@ app:
 
 server:
   port: ${PORT:8080}
+
+management:
+  server:
+    address: 127.0.0.1
+    port: ${APP_MANAGEMENT_PORT:9090}
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: never
+  tracing:
+    export:
+      otlp:
+        enabled: false
+    sampling:
+      probability: 0.1
+    propagation:
+      type: w3c
+  otlp:
+    metrics:
+      export:
+        enabled: false
+  logging:
+    export:
+      otlp:
+        enabled: false
 
 logging:
   level:

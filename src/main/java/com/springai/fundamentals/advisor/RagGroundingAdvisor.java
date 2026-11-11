@@ -1,6 +1,8 @@
 package com.springai.fundamentals.advisor;
 
 import java.util.List;
+
+import org.jspecify.annotations.NullMarked;
 import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.client.advisor.api.StreamAdvisor;
@@ -19,7 +21,7 @@ public final class RagGroundingAdvisor implements StreamAdvisor {
             + "learning notes. Try a question about Spring AI, RAG, embeddings, or tool calling, or use Tutor mode.";
 
     @Override
-    public String getName() {
+    public @NullMarked String getName() {
         return getClass().getSimpleName();
     }
 
@@ -30,7 +32,7 @@ public final class RagGroundingAdvisor implements StreamAdvisor {
     }
 
     @Override
-    public Flux<ChatClientResponse> adviseStream(ChatClientRequest request, StreamAdvisorChain chain) {
+    public @NullMarked Flux<ChatClientResponse> adviseStream(ChatClientRequest request, StreamAdvisorChain chain) {
         return Flux.defer(() -> {
             Object retrieved = request.context().get(QuestionAnswerAdvisor.RETRIEVED_DOCUMENTS);
             if (!(retrieved instanceof List<?> documents)

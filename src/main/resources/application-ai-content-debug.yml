@@ -1,0 +1,18 @@
+# Explicit opt-in: these logs and trace attributes can contain user and document content.
+spring:
+  ai:
+    chat:
+      client:
+        observations:
+          log-prompt: true
+          log-completion: true
+      observations:
+        log-prompt: true
+        log-completion: true
+        include-error-logging: true
+    tools:
+      observations:
+        include-content: true
+    vectorstore:
+      observations:
+        log-query-response: true

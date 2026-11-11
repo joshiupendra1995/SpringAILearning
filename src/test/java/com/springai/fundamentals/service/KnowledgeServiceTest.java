@@ -10,9 +10,17 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.ArrayList;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 import com.springai.fundamentals.model.KnowledgeStatus;
 import com.springai.fundamentals.model.RagTopic;
+import io.micrometer.core.instrument.observation.DefaultMeterObservationHandler;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import io.micrometer.observation.Observation;
+import io.micrometer.observation.ObservationHandler;
+import io.micrometer.observation.ObservationRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.document.Document;
@@ -20,6 +28,7 @@ import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.ai.embedding.EmbeddingRequest;
 import org.springframework.ai.embedding.EmbeddingResponse;
 import org.springframework.ai.vectorstore.SearchRequest;
+import org.springframework.ai.vectorstore.observation.VectorStoreObservationContext;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.support.ResourcePatternResolver;
@@ -337,6 +346,89 @@ class KnowledgeServiceTest {
     }
 
     @Test
+    void indexesObservabilityLessonUnderSpringAiTopic() throws IOException {
+        when(resources.getResources(RESOURCE_PATTERN)).thenReturn(new Resource[] {
+                note("observability.txt", "ALPHA explains metrics and tracing for Spring AI operations.")
+        });
+        KnowledgeService service = service(3, 0.95);
+        service.index();
+
+        List<Document> matches = search(service.retrieval(RagTopic.SPRING_AI), "ALPHA");
+
+        assertEquals(1, matches.size());
+        assertEquals("spring-ai", matches.getFirst().getMetadata().get("topic"));
+        assertEquals("observability.txt", matches.getFirst().getMetadata().get("source"));
+    }
+
+    @Test
+    void recordsAddAndQueryMetricsWithoutContentDimensionsAcrossIndexReplacements() throws IOException {
+        when(resources.getResources(RESOURCE_PATTERN)).thenReturn(new Resource[] {
+                note("private-source.txt", "ALPHA is a private learning note used by the observation test.")
+        });
+        SimpleMeterRegistry meters = new SimpleMeterRegistry();
+        try {
+            ObservationRegistry observations = ObservationRegistry.create();
+            observations.observationConfig().observationHandler(new DefaultMeterObservationHandler(meters));
+            KnowledgeService service = new KnowledgeService(embeddings, resources, observations,
+                    "test-embeddings", 3, 0.45);
+
+            service.index();
+            service.search("ALPHA private-question-123");
+            service.index();
+            service.search("ALPHA another-private-question-456");
+
+            assertEquals(2, meters.get("db.vector.client.operation")
+                    .tag("db.operation.name", "add").tag("db.system", "simple").timer().count());
+            assertEquals(2, meters.get("db.vector.client.operation")
+                    .tag("db.operation.name", "query").tag("db.system", "simple").timer().count());
+            meters.getMeters().forEach(meter -> meter.getId().getTags().forEach(tag -> {
+                assertFalse(tag.getKey().startsWith("db.vector.query."));
+                assertFalse(tag.getValue().contains("private-question"));
+                assertFalse(tag.getValue().contains("private-source"));
+                assertFalse(tag.getValue().contains("private learning note"));
+            }));
+        } finally {
+            meters.close();
+        }
+    }
+
+    @Test
+    void omitsQueryAndFilterContentsFromTraceAttributesWhileKeepingSearchSettings() throws IOException {
+        when(resources.getResources(RESOURCE_PATTERN)).thenReturn(new Resource[] {
+                note("rag-foundations.txt", "ALPHA is a private learning note for the tracing test.")
+        });
+        List<Observation.Context> observed = new ArrayList<>();
+        ObservationRegistry observations = ObservationRegistry.create();
+        observations.observationConfig().observationHandler(new ObservationHandler<Observation.Context>() {
+            @Override
+            public boolean supportsContext(Observation.Context context) {
+                return context instanceof VectorStoreObservationContext;
+            }
+
+            @Override
+            public void onStop(Observation.Context context) {
+                observed.add(context);
+            }
+        });
+        KnowledgeService service = new KnowledgeService(embeddings, resources, observations,
+                "test-embeddings", 3, 0.45);
+
+        service.index();
+        search(service.retrieval(RagTopic.RAG), "ALPHA private-question-123");
+
+        assertEquals(2, observed.size());
+        Map<String, String> attributes = observed.getLast().getHighCardinalityKeyValues().stream()
+                .collect(Collectors.toMap(keyValue -> keyValue.getKey(), keyValue -> keyValue.getValue()));
+        assertFalse(attributes.containsKey("db.vector.query.content"));
+        assertFalse(attributes.containsKey("db.vector.query.filter"));
+        assertFalse(attributes.values().stream().anyMatch(value -> value.contains("private-question")));
+        assertEquals("3", attributes.get("db.vector.query.top_k"));
+        assertEquals("0.45", attributes.get("db.vector.query.similarity_threshold"));
+        assertEquals("2", attributes.get("db.vector.dimension_count"));
+        assertEquals("cosine", attributes.get("db.search.similarity_metric"));
+    }
+
+    @Test
     void topicFilteringStillHonorsTopKAndSimilarityThreshold() throws IOException {
         when(resources.getResources(RESOURCE_PATTERN)).thenReturn(new Resource[] {
                 note("rag-foundations.txt", "ALPHA is an exact matching note about retrieval foundations."),
@@ -461,7 +553,8 @@ class KnowledgeServiceTest {
     }
 
     private KnowledgeService service(int topK, double threshold) {
-        return new KnowledgeService(embeddings, resources, "test-embeddings", topK, threshold);
+        return new KnowledgeService(embeddings, resources, ObservationRegistry.NOOP,
+                "test-embeddings", topK, threshold);
     }
 
     private void pauseEmbeddings() {
