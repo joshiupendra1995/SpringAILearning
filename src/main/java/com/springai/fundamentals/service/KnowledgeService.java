@@ -182,7 +182,7 @@ public class KnowledgeService {
 
     private String topicFor(String filename) {
         return switch (filename) {
-            case "tool-calling.txt" -> "tools";
+            case "tool-calling.txt", "mcp.txt" -> "tools";
             case "spring-ai-app.txt", "testing-ai-applications.txt", "observability.txt" -> "spring-ai";
             default -> "rag";
         };

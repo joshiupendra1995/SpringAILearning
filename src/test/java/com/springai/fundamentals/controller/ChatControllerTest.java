@@ -161,7 +161,7 @@ class ChatControllerTest {
 
     @Test
     void rejectsTopicFieldsOutsideRagMode() {
-        for (String mode : List.of("tutor", "tools")) {
+        for (String mode : List.of("tutor", "tools", "mcp")) {
             ResponseStatusException exception = assertThrows(ResponseStatusException.class,
                     () -> chatController.chat(new ChatRequest("Hello", mode, "all"), session));
             assertEquals(HttpStatus.BAD_REQUEST, exception.getStatusCode());

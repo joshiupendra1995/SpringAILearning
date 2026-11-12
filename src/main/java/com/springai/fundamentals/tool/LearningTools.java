@@ -47,10 +47,10 @@ public class LearningTools {
     }
 
     @Tool(description = "Get the outline of a topic taught in this learning application. "
-            + "Use this to identify what to study in fundamentals, spring-ai, advisors, rag, or tools. "
+            + "Use this to identify what to study in fundamentals, spring-ai, advisors, rag, tools, or mcp. "
             + "This reads the application's lesson catalog and does not change anything.")
     public String getLessonOutline(
-            @ToolParam(description = "Topic: fundamentals, spring-ai, advisors, rag, or tools") String topic) {
+            @ToolParam(description = "Topic: fundamentals, spring-ai, advisors, rag, tools, or mcp") String topic) {
         if (topic == null) {
             throw invalidTopic();
         }
@@ -68,12 +68,16 @@ public class LearningTools {
                     + "chunking, EmbeddingModel, Document, VectorStore, QuestionAnswerAdvisor, custom prompt "
                     + "templates, grounded generation, and modular RetrievalAugmentationAdvisor examples.";
             case "tools" -> "Tool calling: tool descriptions and input schemas, the model-request/application-execute "
-                    + "loop, read-only retrieval versus actions, argument validation, and trusted ToolContext inputs.";
+                    + "loop, read-only retrieval versus actions, argument validation, trusted ToolContext inputs, "
+                    + "and Model Context Protocol clients, servers, tools, resources, and prompts.";
+            case "mcp" -> "Model Context Protocol: host, client, and server roles; JSON-RPC discovery and tool calls; "
+                    + "Streamable HTTP and stdio transports; tools, resources, and prompts; Spring AI asynchronous "
+                    + "client/server profiles; tool filtering, argument validation, and authorization boundaries.";
             default -> throw invalidTopic();
         };
     }
 
     private IllegalArgumentException invalidTopic() {
-        return new IllegalArgumentException("Topic must be one of: fundamentals, spring-ai, advisors, rag, tools.");
+        return new IllegalArgumentException("Topic must be one of: fundamentals, spring-ai, advisors, rag, tools, mcp.");
     }
 }

@@ -30,7 +30,7 @@ import reactor.core.publisher.Mono;
 public class ChatController {
 
     private static final int MAX_PROMPT_LENGTH = 2_000;
-    private static final Set<String> CHAT_MODES = Set.of("tutor", "rag", "tools");
+    private static final Set<String> CHAT_MODES = Set.of("tutor", "rag", "tools", "mcp");
 
     private final ChatService chatService;
 
@@ -47,7 +47,7 @@ public class ChatController {
         String mode = request.mode() == null ? "rag" : request.mode();
         if (!CHAT_MODES.contains(mode)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "Mode must be tutor, rag, or tools.");
+                    "Mode must be tutor, rag, tools, or mcp.");
         }
         RagTopic topic;
         try {

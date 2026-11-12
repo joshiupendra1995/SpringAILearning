@@ -1,0 +1,14 @@
+spring:
+  ai:
+    mcp:
+      client:
+        enabled: true
+        name: spring-ai-learning-host
+        version: 1.0.0
+        type: ASYNC
+        request-timeout: 30s
+        streamable-http:
+          connections:
+            lessons:
+              url: ${MCP_SERVER_URL:http://127.0.0.1:8090}
+              endpoint: /mcp

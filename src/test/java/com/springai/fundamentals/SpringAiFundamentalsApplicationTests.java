@@ -37,7 +37,7 @@ class SpringAiFundamentalsApplicationTests {
                 .exchange()
                 .expectStatus().isBadRequest()
                 .expectBody()
-                .jsonPath("$.error").isEqualTo("Mode must be tutor, rag, or tools.");
+                .jsonPath("$.error").isEqualTo("Mode must be tutor, rag, tools, or mcp.");
     }
 
     @Test
@@ -82,6 +82,32 @@ class SpringAiFundamentalsApplicationTests {
                 .value(body -> {
                     org.junit.jupiter.api.Assertions.assertTrue(body.contains("event:error"));
                     org.junit.jupiter.api.Assertions.assertTrue(body.contains("Could not prepare the learning notes"));
+                    org.junit.jupiter.api.Assertions.assertTrue(body.contains("event:done"));
+                });
+    }
+
+    @Test
+    void disablesMcpConnectionsAndTheServerEndpointUnlessAProfileIsSelected() {
+        client().get().uri("/api/mcp").exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.enabled").isEqualTo(false)
+                .jsonPath("$.tools").isEmpty();
+        client().post().uri("/mcp").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}")
+                .exchange().expectStatus().isNotFound();
+    }
+
+    @Test
+    void explainsHowToEnableMcpInsteadOfFallingBackToTheModel() {
+        client().post().uri("/api/chat")
+                .contentType(MediaType.APPLICATION_JSON)
+                .accept(MediaType.TEXT_EVENT_STREAM)
+                .bodyValue("{\"message\":\"Look up the MCP lesson outline\",\"mode\":\"mcp\"}")
+                .exchange().expectStatus().isOk()
+                .expectBody(String.class).value(body -> {
+                    org.junit.jupiter.api.Assertions.assertTrue(body.contains("event:error"));
+                    org.junit.jupiter.api.Assertions.assertTrue(body.contains("mcp-client profile"));
                     org.junit.jupiter.api.Assertions.assertTrue(body.contains("event:done"));
                 });
     }

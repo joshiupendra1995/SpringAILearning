@@ -1,6 +1,6 @@
 # Spring AI Fundamentals
 
-An interactive learning app for modern AI concepts and the Spring AI programming model. Read the lessons, inspect Java examples, and experiment with a local tutor, document retrieval, and an optional Java-tools mode.
+An interactive learning app for modern AI concepts and the Spring AI programming model. Read the lessons, inspect Java examples, and experiment with a local tutor, document retrieval, Java tools, and an optional MCP client/server demo.
 
 ## What’s implemented
 
@@ -11,11 +11,12 @@ An interactive learning app for modern AI concepts and the Spring AI programming
 - **RAG lessons:** embeddings, vector dimensions, similarity search, top K, similarity thresholds, metadata filters, and the extract → transform → load indexing pipeline. Advanced examples introduce query rewriting, routing, hybrid search, reranking, and context compression.
 - **Spring AI RAG APIs:** `EmbeddingModel`, `Document`, `VectorStore`, `SearchRequest`, the ETL interfaces, `QuestionAnswerAdvisor`, custom context templates, and the modular `RetrievalAugmentationAdvisor`.
 - **Tool-calling lessons:** tool descriptions and generated schemas, the model/application execution loop, argument validation, and application-controlled context through `ToolContext`.
-- **RAG by default:** the chat starts in Learning tutor (RAG) mode, and API requests that omit `mode` also default to RAG. This mode retrieves relevant passages from bundled notes and does not invoke `LearningTools`. General tutor mode is an explicit alternative without retrieval; only the separately selected tools mode exposes the read-only Java functions in `LearningTools`.
+- **Model Context Protocol:** lessons explain hosts, clients, servers, JSON-RPC discovery, transports, tools/resources/prompts, callbacks, authorization, and protocol revisions. Opt-in profiles publish a read-only MCP server and connect a separate app instance to it; MCP chat uses remote tool callbacks.
+- **RAG by default:** the chat starts in Learning tutor (RAG) mode, and API requests that omit `mode` also default to RAG. This mode retrieves relevant passages from bundled notes. General tutor mode answers without retrieval, tools mode registers local Java functions, and MCP mode registers only the allowlisted remote tools when its client profile is enabled.
 - **Automatic first-use indexing:** the first RAG question prepares the bundled learning notes, splits them into chunks, creates embeddings with Ollama, and loads an in-memory `SimpleVectorStore`. Concurrent first questions share the same build. Later questions reuse the index, and the browser’s rebuild button or API can refresh it. Starting the app does not call Ollama.
 - **Advisor-based RAG:** `QuestionAnswerAdvisor` searches the indexed notes and augments the user prompt. A downstream grounding advisor stops empty retrievals before the chat model is called. The application appends retrieved source filenames from the advisor context to the answer.
 - **Metadata filtering:** RAG requests can select all notes or restrict retrieval to `rag`, `spring-ai`, or `tools` using the indexed `topic` metadata. Java validates the selection and builds the filter; clients do not submit raw filter expressions.
-- **Session chat memory:** a `MessageChatMemoryAdvisor` supplies a bounded in-memory message history using a server-managed WebSession ID and a separate history for each mode. The “New chat” button clears all three mode histories for the current session.
+- **Session chat memory:** a `MessageChatMemoryAdvisor` supplies a bounded in-memory message history using a server-managed WebSession ID and a separate history for each mode. The “New chat” button clears all four mode histories for the current session.
 - **Reactive streaming:** `ChatClient` streaming responses feed Server-Sent Events to the browser. The interface displays text incrementally and renders conversation content as text rather than HTML.
 - **Input validation:** chat requests reject blank messages and messages longer than 2,000 characters; tool arguments are validated in Java.
 
@@ -23,7 +24,7 @@ Some lesson snippets are illustrative: multimodal prompts, structured-output con
 
 ## Architecture
 
-The application is a single Spring Boot WebFlux service with a browser-based learning UI. It has three deliberately separate chat paths: retrieval-augmented generation (the default), a general tutor without retrieval, and optional read-only Java tools. Ollama provides the chat and embedding models; bundled notes ship with the application, while the vector index and chat memory are held in process memory.
+The application is a Spring Boot WebFlux service with a browser-based learning UI. It has four separate chat paths: retrieval-augmented generation (the default), a general tutor, local Java tools, and MCP tools. Ollama provides the chat and embedding models; bundled notes ship with the application, while the vector index and chat memory are held in process memory. The optional MCP exercise runs a second instance of the same app as a separate capability server.
 
 ### Application architecture
 
@@ -40,6 +41,7 @@ flowchart TD
         aChatService["Chat service"]
         aKnowledgeService["Knowledge service"]
         aLearningTools["LearningTools"]
+        aMcpClient["MCP client and remote callbacks"]
     end
     subgraph aState["Process local state"]
         aMemory[("Chat memory")]
@@ -50,6 +52,7 @@ flowchart TD
         aChatModel["Ollama chat model"]
         aEmbedModel["Ollama embedding model"]
     end
+    aMcpServer["Optional separate MCP server instance"]
 
     aBrowser -->|"loads"| aStatic
     aBrowser -->|"chat request and event stream"| aChatApi
@@ -59,6 +62,8 @@ flowchart TD
     aChatService -->|"session and mode history"| aMemory
     aChatService -->|"RAG mode only"| aKnowledgeService
     aChatService -->|"tools mode only"| aLearningTools
+    aChatService -->|"mcp mode only"| aMcpClient
+    aMcpClient -->|"Streamable HTTP JSON-RPC"| aMcpServer
     aKnowledgeService -->|"reads and chunks"| aNotes
     aKnowledgeService -->|"indexes and searches"| aVector
     aKnowledgeService -->|"embeds documents and queries"| aEmbedModel
@@ -71,13 +76,14 @@ flowchart TD
 
 `POST /api/chat` validates the message, mode, and optional RAG topic before dispatching to `ChatService`. The browser starts in RAG mode; the API also defaults to RAG when `mode` is omitted. Each mode uses a separate conversation-history key for the same WebSession.
 
-| Mode | Retrieval | Java tools | Model behavior |
+| Mode | Retrieval | Tools | Model behavior |
 | --- | --- | --- | --- |
 | `rag` (default) | Searches bundled notes with `QuestionAnswerAdvisor` | None; `LearningTools` is not registered | Grounds responses in retrieved passages; adds retrieved source filenames |
 | `tutor` | None | None | Answers using the tutor system prompt and chat model |
 | `tools` | None | Read-only `LearningTools` methods | The model may request the current time or a lesson outline; Java validates and executes the request |
+| `mcp` | None | Allowlisted tools discovered from the configured MCP server | The model requests a remote lesson outline or server time; Spring AI sends the call over MCP |
 
-Chat responses stream as Server-Sent Events. Token events carry generated text, RAG adds source names after the answer, and a done event closes the stream. Validation failures before streaming starts return a JSON error; failures during streaming are sent as a user-safe error event. `DELETE /api/chat` clears the current session’s histories in all three modes without removing the knowledge index.
+Chat responses stream as Server-Sent Events. Token events carry generated text, RAG adds source names after the answer, and a done event closes the stream. Validation failures before streaming starts return a JSON error; failures during streaming are sent as a user-safe error event. `DELETE /api/chat` clears the current session’s histories in all four modes without removing the knowledge index. MCP mode requires the `mcp-client` profile; it reports an unavailable integration instead of switching to another mode.
 
 ### RAG indexing and retrieval
 
@@ -128,15 +134,17 @@ The vector store and bounded chat memory are process-local, not a database or ex
 | --- | --- |
 | Browser UI (`static/index.html`, `app.js`, `styles.css`) | Selects chat mode and RAG topic, submits requests, reads SSE, and reports index status |
 | `ChatController` | Validates chat requests, obtains the WebSession, routes streaming events, and clears session histories |
-| `ChatService` | Dispatches RAG, tutor, and tools modes; configures prompt and memory advisors; streams model output |
+| `ChatService` | Dispatches RAG, tutor, tools, and MCP modes; configures prompt and memory advisors; streams model output |
 | `KnowledgeController` | Reports knowledge status and exposes an explicit index rebuild endpoint |
 | `KnowledgeService` | Loads and chunks notes, builds or replaces the vector store, and supplies topic-filtered search settings |
 | `QuestionAnswerAdvisor` | Searches the selected vector store and adds matching note text to the RAG prompt |
 | `RagGroundingAdvisor` | Stops generation when retrieval provides no documents |
-| `LearningTools` | Supplies explicitly registered, read-only time and lesson-outline functions in tools mode only |
+| `LearningTools` | Supplies local read-only time and lesson-outline functions, also reused by the MCP capability adapter |
+| `McpRemoteTools` | Resolves the configured MCP provider and limits model-visible remote callbacks to the two learning tools |
+| `LearningMcpCapabilities` | Publishes read-only tools, a resource template, and a prompt only in the `mcp-server` profile |
 | Ollama | Hosts the configured chat model and embedding model locally |
 
-Spring AI's `MessageChatMemoryAdvisor` keeps bounded in-memory histories using the server WebSession ID plus the mode. The chat model and embedding model share the configured Ollama endpoint but serve different roles. No relational database, persistent vector database, web-search service, or external tools service is part of this app.
+Spring AI's `MessageChatMemoryAdvisor` keeps bounded in-memory histories using the server WebSession ID plus the mode. The chat model and embedding model share the configured Ollama endpoint but serve different roles. The optional MCP server is a separate process reached over loopback HTTP; the default startup makes no MCP connections. No relational database, persistent vector database, or web-search service is part of this app.
 
 ### Technology stack
 
@@ -152,10 +160,12 @@ Spring AI's `MessageChatMemoryAdvisor` keeps bounded in-memory histories using t
 | Conversation storage | Spring AI chat memory | In-memory | Bounded, per-WebSession and per-mode history |
 | Metrics | Spring Boot Actuator, Micrometer, Prometheus registry | Spring Boot managed | HTTP and AI operation timing, counts, and reported token usage |
 | Tracing | Micrometer Tracing, OpenTelemetry with OTLP | Spring Boot managed | Correlated spans; collector export enabled by the `tracing` profile |
+| Remote capabilities | Spring AI MCP WebFlux client and server starters | Spring AI BOM managed | Opt-in Streamable HTTP capability server and model tool callbacks |
 
 ### Architectural decisions and boundaries
 
-- RAG, tutor, and tools are explicit alternative modes, not a combined autonomous workflow. In particular, the default RAG path does not register or invoke `LearningTools`.
+- RAG, tutor, tools, and MCP are explicit alternative modes. The default RAG path does not register local or remote tool callbacks.
+- MCP client and server are disabled by default and enabled through separate profiles. Only annotated MCP capabilities are published; automatic conversion of arbitrary `ToolCallbackProvider` beans into server tools is disabled.
 - `SimpleVectorStore` keeps this learning app self-contained and demonstrates the vector-store API; it is not durable or shared across application instances.
 - First-use indexing happens on a RAG request rather than app startup, and replacement indexes are published only after a successful build.
 - Topic filters select among this shared set of learning notes. They are relevance controls, not user authorization or access controls.
@@ -165,7 +175,7 @@ Spring AI's `MessageChatMemoryAdvisor` keeps bounded in-memory histories using t
 
 - Java 21 or newer
 - Maven 3.9+
-- [Ollama](https://ollama.com/) installed and running locally
+- [Ollama](https://ollama.com/) installed and running locally for model chat and RAG; the standalone MCP capability server can run without it
 
 ## Run locally
 
@@ -247,7 +257,7 @@ The registered methods are:
 | Tool | Model-supplied arguments | Application behavior |
 | --- | --- | --- |
 | `getCurrentDateTime` | None | Reads the clock in the server-configured time zone supplied through `ToolContext` |
-| `getLessonOutline` | `topic`: `fundamentals`, `spring-ai`, `advisors`, `rag`, or `tools` | Validates the topic and returns its lesson outline |
+| `getLessonOutline` | `topic`: `fundamentals`, `spring-ai`, `advisors`, `rag`, `tools`, or `mcp` | Validates the topic and returns its lesson outline |
 
 `ToolContext` supplies trusted configuration from the application rather than letting the model choose it. The time zone defaults to `Asia/Kolkata`; set `APP_TIME_ZONE` to change it. A tool call remains untrusted input: Java code validates model-supplied arguments and controls which operations are available. These examples do not send messages, update external systems, or access customer data.
 
@@ -258,6 +268,58 @@ RAG and tools solve different problems and can be combined in larger application
 | RAG | Relevant passages from indexed documentation | Explain embeddings using the bundled notes |
 | Tool calling | Results from application code at request time | Read the current time or a lesson outline |
 | Chat memory | Earlier conversation turns | Answer a follow-up in the same browser session |
+
+### Try MCP with two application instances
+
+MCP standardizes how an AI application discovers and invokes capabilities supplied by another process. In this demo the browser/chat application is the **host**, Spring AI creates its **client** connection, and a second application instance is the **server**. The server publishes a public lesson catalogue; it does not need a running model to serve these capabilities.
+
+Start the MCP server in one terminal:
+
+```bash
+SPRING_PROFILES_ACTIVE=mcp-server mvn spring-boot:run
+```
+
+This profile binds the application to `127.0.0.1:8090`, exposes Streamable HTTP at `/mcp`, and uses management port `9091`. `MCP_SERVER_PORT` and `MCP_MANAGEMENT_PORT` change those ports. `APP_TIME_ZONE` controls the server's clock output. The profile uses the reactive `ASYNC` server and annotation methods returning `Mono`.
+
+With Ollama running, install a tool-capable chat model, then start the MCP host in a second terminal:
+
+```bash
+ollama pull llama3.1:latest
+SPRING_PROFILES_ACTIVE=mcp-client \
+OLLAMA_CHAT_MODEL=llama3.1:latest \
+mvn spring-boot:run
+```
+
+Open [http://localhost:8080](http://localhost:8080), choose **Use MCP tools**, and ask “Use the MCP server to show the RAG lesson outline” or “What time is it on the MCP server?” RAG remains the initial selection. The MCP client connects during startup, so start the server first. The default `llama3:latest` is intended for tutor/RAG; both local tools and MCP chat need a model with tool-calling support. No profile downloads a model automatically.
+
+The client profile sets `spring.ai.mcp.client.type=ASYNC`, a `30s` request timeout, and a named Streamable HTTP connection `lessons` with URL `${MCP_SERVER_URL:http://127.0.0.1:8090}`. For a changed server port, set `MCP_SERVER_URL=http://127.0.0.1:8092` on the client. The URL is the server origin; `/mcp` is the configured MCP endpoint. Client-side callbacks are registered only on MCP chat requests rather than as tools on every `ChatClient` call.
+
+| Published capability | MCP identifier | Behavior |
+| --- | --- | --- |
+| Tool | `learning_outline` | Takes `topic`; returns a validated public lesson outline |
+| Tool | `learning_server_time` | Takes no arguments; returns time in the MCP server's configured zone |
+| Resource template | `learning://topics/{topic}` | Returns the corresponding lesson outline as `text/plain` |
+| Prompt | `study_topic` | Takes `topic`; returns a reusable user message for studying that outline |
+
+Allowed topics are `fundamentals`, `spring-ai`, `advisors`, `rag`, `tools`, and `mcp`. Unknown topics fail validation on the server. The host allowlists the two remote tool names; resources and prompts are available to MCP clients through `resources/read` and `prompts/get`, but the browser's chat does not automatically read or apply them. SDK integration tests exercise discovery, tool calls, the resource template, and prompt retrieval without Ollama. The bundled MCP notes are searchable in RAG under the existing **Tools** topic; `mcp` is a lesson-outline argument rather than a new RAG filter.
+
+```bash
+curl http://localhost:8080/api/mcp
+curl -N http://localhost:8080/api/chat \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: text/event-stream' \
+  -d '{"message":"Use the MCP server to show the RAG lesson outline","mode":"mcp"}'
+```
+
+The server profile exposes only the explicitly annotated methods in `LearningMcpCapabilities`. `@Tool` registers application methods for local model calls; `@McpTool` publishes a capability over the protocol. `spring.ai.mcp.server.tool-callback-converter=false` prevents local or discovered client callback beans from being implicitly republished by the server. Tool annotations describing read-only behavior are hints; Java validation and the implementation determine what a tool can do.
+
+#### Protocol and security boundaries
+
+The pinned Spring AI `2.0.1` dependencies resolve MCP Java SDK `2.0.0`. Its supported handshake-based protocol revisions extend through `2025-11-25`, which the integration test verifies client and server negotiate. This exercise uses initialization, `tools/list`, and `tools/call`. The newer `2026-07-28` specification describes per-request version/capability metadata and `server/discover`; a Spring `STATELESS` deployment setting alone does not enable that newer protocol revision. Check actual SDK support before adopting examples from another revision. See [MCP versioning](https://modelcontextprotocol.io/specification/versioning).
+
+The lessons also explain stdio, server notifications, sampling, elicitation, roots, and callback annotations. These are protocol concepts and optional extensions, not active background features of this demo. Stdio would launch an explicitly configured local process and reserve stdout for JSON-RPC; this app instead connects to the manually started HTTP server. Streamable HTTP can itself stream SSE responses; the older dedicated HTTP+SSE transport is deprecated in Spring AI.
+
+The MCP endpoint has no OAuth login or token validation. It binds to loopback, serves public read-only material, and rejects foreign browser origins or non-loopback host headers. Those checks limit the local demo's exposure; they do not authenticate callers. An HTTP deployment with protected data needs a security layer that validates credentials, token audience, scopes, and per-operation permissions. MCP's OAuth guidance includes protected-resource discovery and audience-bound tokens. Do not forward an incoming MCP access token to downstream APIs; obtain a separate token scoped to the downstream service. Roots communicate cooperative scope information, not an enforced filesystem sandbox, and elicitation consent is not authorization. See the [MCP authorization specification](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization) and [Spring MCP server security guidance](https://docs.spring.io/spring-ai/reference/api/mcp/mcp-server-boot-starter-docs.html#_securing_the_mcp_server).
 
 ### Ollama configuration and troubleshooting
 
@@ -282,9 +344,9 @@ A Reactor Netty `ReadTimeoutException` means Ollama did not respond within the c
 }
 ```
 
-`mode` is optional and defaults to `rag`. The server prepares the index on first use and retrieves notes before generation; this RAG path does not use `LearningTools`. Set `mode: "tutor"` explicitly to answer without retrieval or Java tools, or `mode: "tools"` to expose the read-only methods in `LearningTools`.
+`mode` is optional and defaults to `rag`. The server prepares the index on first use and retrieves notes before generation; this RAG path does not use tools. Set `mode: "tutor"` explicitly to answer without retrieval or tools, `mode: "tools"` to expose local `LearningTools`, or `mode: "mcp"` to use the configured remote MCP tools.
 
-RAG also accepts optional `topic`: `all` (the default), `rag`, `spring-ai`, or `tools`. A topic is valid when `mode` is omitted because that request uses RAG. Omit `topic` for explicit tutor and tools requests. Invalid topics or a topic supplied outside RAG mode return `400 Bad Request`; raw filter strings are not accepted.
+RAG also accepts optional `topic`: `all` (the default), `rag`, `spring-ai`, or `tools`. A topic is valid when `mode` is omitted because that request uses RAG. Omit `topic` for explicit tutor, tools, and MCP requests. Invalid topics or a topic supplied outside RAG mode return `400 Bad Request`; raw filter strings are not accepted.
 
 Successful responses use `Content-Type: text/event-stream`. Text arrives in `token` events, followed by `done`. RAG uses these same events and appends its source list as text:
 
@@ -341,7 +403,11 @@ Browser cookies maintain the WebSession used for chat memory. With curl, use a c
 
 ### `DELETE /api/chat`
 
-Clears the current WebSession’s chat history in all three modes. The browser’s “New chat” button calls this endpoint. It does not remove the document index.
+Clears the current WebSession’s chat history in all four modes. The browser’s “New chat” button calls this endpoint. It does not remove the document index.
+
+### `GET /api/mcp`
+
+Returns `enabled` and a `tools` array containing the model-visible MCP tool names. Without `mcp-client`, it returns `{"enabled":false,"tools":[]}` and makes no remote connection. An enabled client that cannot supply its tools reports `503 Service Unavailable` with a safe setup error. MCP chat also reports a setup error when its client is disabled; it does not fall back to local tools or RAG.
 
 ### `GET /api/knowledge`
 
@@ -468,7 +534,7 @@ If a meter is absent, first run the corresponding operation and wait for streami
 
 ## Testing AI applications
 
-The learning section at the end of the app separates three test tiers:
+The app's Testing AI learning section separates three test tiers:
 
 - **Deterministic unit tests:** mock `ChatModel` and `VectorStore` dependencies to verify application behavior such as prompts, retrieval requests, advisor decisions, and tool handling. These should be the fast tests run most often.
 - **Answer evaluation:** the opt-in `RagAnswerEvaluationTest` uses Spring AI's `RelevancyEvaluator` and `FactCheckingEvaluator` with a real judge model. It assesses real RAG answers against their question and retrieved `Document` context, with unrelated-answer and unsupported-claim negative controls. Evaluate relevance and factual support separately; avoid exact-string assertions on live generated text.
@@ -484,7 +550,7 @@ The judge has its own `ChatClient.Builder`, without the answer client's RAG or c
 
 ## Run tests
 
-The regular suite uses mocks and does not run a real LLM judge or require a running Ollama service or Docker. It checks deterministic application behavior such as prompts, retrieval requests, advisor outcomes, tool execution, API responses, and the evaluator contracts. Tests tagged `ai-evaluation` are excluded by default.
+The regular suite uses mocks and does not run a real LLM judge or require a running Ollama service or Docker. It checks deterministic application behavior such as prompts, retrieval requests, advisor outcomes, tool execution, API responses, and evaluator contracts. MCP integration tests additionally start a local HTTP server and use the real Java SDK for initialization, discovery, tools, resources, and prompts; generated model decisions remain controlled in those tests. Tests tagged `ai-evaluation` are excluded by default.
 
 ```bash
 mvn test
@@ -521,7 +587,8 @@ For example, reuse the installed answer model for separate judging calls with `O
 - Topic metadata filtering is implemented. Arbitrary filters, query rewriting, expansion, reranking, hybrid search, and the modular RAG advisor remain educational examples.
 - Retrieval searches the current message without rewriting it from chat history. Restate the topic in follow-up questions when needed.
 - Tools are limited to the explicitly registered read-only methods. The model cannot independently execute arbitrary Java, access private systems, or take external actions.
-- Models vary in tool-calling support and reliability. Use a compatible model for tools mode.
+- Models vary in tool-calling support and reliability. Use a compatible model for local tools and MCP modes.
+- MCP tools require an explicitly enabled client profile and an available server. The demo uses public learning capabilities; OAuth, client sampling, elicitation, dynamic list changes, and stdio are lessons rather than configured features.
 - Multimodal input, provider switching, structured-output conversion, and recursive validation remain illustrative examples.
 - Chat prompts are limited to 2,000 characters. This local demo does not implement production authentication, authorization, indexing access controls, or rate limiting.
 
@@ -529,6 +596,10 @@ For example, reuse the installed answer model for separate judging calls with `O
 
 - [Spring AI RAG reference](https://docs.spring.io/spring-ai/reference/api/retrieval-augmented-generation.html)
 - [Spring AI tool calling reference](https://docs.spring.io/spring-ai/reference/api/tools.html)
+- [MCP architecture](https://modelcontextprotocol.io/docs/learn/architecture)
+- [MCP protocol versioning](https://modelcontextprotocol.io/specification/versioning)
+- [Spring AI MCP client starter](https://docs.spring.io/spring-ai/reference/api/mcp/mcp-client-boot-starter-docs.html)
+- [Spring AI MCP server starter](https://docs.spring.io/spring-ai/reference/api/mcp/mcp-server-boot-starter-docs.html)
 - [Spring AI vector store reference](https://docs.spring.io/spring-ai/reference/api/vectordbs.html)
 - [Spring AI ETL pipeline reference](https://docs.spring.io/spring-ai/reference/api/etl-pipeline.html)
 - [Spring AI observability reference](https://docs.spring.io/spring-ai/reference/observability/index.html)

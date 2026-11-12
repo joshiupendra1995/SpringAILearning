@@ -4,6 +4,12 @@ spring:
   reactor:
     context-propagation: auto
   ai:
+    mcp:
+      client:
+        enabled: false
+      server:
+        enabled: false
+        tool-callback-converter: false
     chat:
       client:
         observations:

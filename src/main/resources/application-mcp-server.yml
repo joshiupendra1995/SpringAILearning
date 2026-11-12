@@ -1,0 +1,19 @@
+server:
+  address: 127.0.0.1
+  port: ${MCP_SERVER_PORT:8090}
+
+management:
+  server:
+    port: ${MCP_MANAGEMENT_PORT:9091}
+
+spring:
+  ai:
+    mcp:
+      server:
+        enabled: true
+        name: learning-notes
+        version: 1.0.0
+        type: ASYNC
+        protocol: STREAMABLE
+        streamable-http:
+          mcp-endpoint: /mcp

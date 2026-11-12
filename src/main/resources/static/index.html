@@ -21,6 +21,7 @@
       <a href="#spring-ai-learning">Spring AI</a>
       <a href="#advanced-patterns">RAG &amp; tools</a>
       <a href="#testing-ai">Testing AI</a>
+      <a href="#mcp">MCP</a>
       <span class="version-pill">A hands-on introduction</span>
     </nav>
   </header>
@@ -45,6 +46,7 @@
             <option value="rag" selected>Learning tutor (RAG)</option>
             <option value="tutor">General tutor (no retrieval)</option>
             <option value="tools">Use Java tools</option>
+            <option value="mcp">Use MCP tools</option>
           </select>
           <span id="rag-topic-controls" hidden>
             <label for="rag-topic">Search topic</label>
@@ -1153,6 +1155,213 @@ mvn spring-boot:run
       <aside class="lesson-takeaway">
         <strong>Inspect the running app</strong>
         <p>Send a chat request, wait for completion, and inspect the local Actuator metrics or Prometheus endpoint. Enable the tracing profile when a collector is available. Read the <a href="https://docs.spring.io/spring-ai/reference/observability/index.html">Spring AI observability reference</a>, <a href="https://docs.spring.io/spring-boot/4.0/reference/actuator/metrics.html">Spring Boot metrics</a>, and <a href="https://docs.spring.io/spring-boot/4.0/reference/actuator/tracing.html">Spring Boot tracing</a> for the operation attributes and exporters.</p>
+      </aside>
+    </section>
+
+    <section class="spring-ai-learning" id="mcp" aria-labelledby="mcp-title">
+      <header class="lesson-heading">
+        <p class="eyebrow">SPRING AI · MODEL CONTEXT PROTOCOL</p>
+        <h2 id="mcp-title">Share capabilities across applications</h2>
+        <p>Local Java tools teach the execution loop. MCP gives another process a standard way to publish tools, context, and prompt templates that an AI application can discover and use.</p>
+      </header>
+
+      <article class="lesson-card">
+        <div class="lesson-copy">
+          <span class="lesson-number">41</span>
+          <h3>A host, a client, and a server</h3>
+          <p>Without a shared protocol, every application needs a custom integration with every tool service. MCP standardizes the discovery and invocation contracts so a server can serve several compatible hosts.</p>
+          <p>The <strong>host</strong> is the AI application that manages the conversation and chooses which capabilities reach its model. It creates an MCP <strong>client</strong> for each configured server connection. The <strong>server</strong> supplies capabilities and controls how they execute.</p>
+          <p>Here the chat application is the host, Spring AI manages its client, and another instance runs the learning MCP server. A server can expose useful data without calling a model.</p>
+        </div>
+        <div class="pattern-diagram">
+          <span class="demo-label">THIS PROJECT'S OPTIONAL MCP PATH</span>
+          <ol class="pattern-flow">
+            <li><strong>Host: browser and chat service</strong><span>Prompt, model, conversation memory, and the remote-tool allowlist</span></li>
+            <li><strong>Client: named lessons connection</strong><span>Discovery and tool callbacks over Streamable HTTP</span></li>
+            <li><strong>Server: separate local process</strong><span>Validated lesson outlines, server time, a resource, and a prompt</span></li>
+          </ol>
+          <p class="demo-footnote">MCP standardizes capability exchange. The host still decides how to use those capabilities.</p>
+        </div>
+      </article>
+
+      <article class="lesson-card lesson-card-reverse">
+        <div class="lesson-copy">
+          <span class="lesson-number">42</span>
+          <h3>Discover first, then invoke through JSON-RPC</h3>
+          <p>MCP uses JSON-RPC 2.0: a request names a method, carries parameters, and has an ID matched by its response. A notification carries no response ID. The SDK handles framing, error messages, and the connection lifecycle.</p>
+          <p>The protocol revision used by this app initializes the connection and negotiates capabilities. The client then sends <code>tools/list</code>. The host presents selected tool schemas to the model; a model request becomes <code>tools/call</code>, and the returned result feeds the next model call.</p>
+          <p><strong>Stdio</strong> connects a host to a launched local process; stdout is reserved for protocol messages. <strong>Streamable HTTP</strong> connects to a running server and can stream responses using SSE. The older dedicated HTTP+SSE transport is deprecated in Spring AI. This app uses Streamable HTTP.</p>
+        </div>
+        <pre class="code-example"><code>// Simplified tools/call request after initialization
+// The SDK supplies session and protocol details.
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "method": "tools/call",
+  "params": {
+    "name": "learning_outline",
+    "arguments": { "topic": "mcp" }
+  }
+}
+
+// Server executes validated application code.
+// Client returns the result to the chat tool loop.
+// The model produces the user-facing answer.</code></pre>
+      </article>
+
+      <article class="lesson-card lesson-card-compact">
+        <span class="lesson-number">43</span>
+        <h3>Tools, resources, and prompts have different jobs</h3>
+        <p>Discovery makes a capability available; the host still controls when to use it. The three server primitives do not all become model tools automatically.</p>
+        <div class="comparison-scroll">
+          <table class="pattern-comparison">
+            <caption>Capabilities actually published by this demo</caption>
+            <thead><tr><th scope="col">Primitive</th><th scope="col">Typical control</th><th scope="col">This server</th><th scope="col">Protocol operation</th></tr></thead>
+            <tbody>
+              <tr><th scope="row">Tool</th><td>Model selects from host-approved schemas</td><td><code>learning_outline(topic)</code> and <code>learning_server_time()</code></td><td><code>tools/list</code>, <code>tools/call</code></td></tr>
+              <tr><th scope="row">Resource</th><td>Application selects context</td><td><code>learning://topics/{topic}</code> returns a public outline</td><td><code>resources/templates/list</code>, <code>resources/read</code></td></tr>
+              <tr><th scope="row">Prompt</th><td>User or host selects a reusable template</td><td><code>study_topic(topic)</code> returns a study request</td><td><code>prompts/list</code>, <code>prompts/get</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>MCP chat invokes the two remote tools. Resource reads and prompt retrieval are exercised by SDK tests; the browser does not automatically attach those capabilities to its conversations. The <code>topic</code> argument accepts fundamentals, spring-ai, advisors, rag, tools, or mcp.</p>
+      </article>
+
+      <article class="lesson-card">
+        <div class="lesson-copy">
+          <span class="lesson-number">44</span>
+          <h3>Publish reactive Spring capabilities</h3>
+          <p>The WebFlux server starter supplies the protocol endpoint. <code>@McpTool</code> publishes a tool and derives its input schema; <code>@McpToolParam</code> describes an argument. <code>@McpResource</code> supplies a URI template, and <code>@McpPrompt</code> supplies reusable messages.</p>
+          <p>This app uses <code>spring.ai.mcp.server.type=ASYNC</code> with <code>protocol=STREAMABLE</code>. Its annotated methods return <code>Mono</code>. Match method style to server type: an ASYNC scanner ignores synchronous handlers.</p>
+          <p><code>@Tool</code> registers a method for local application tool calling. <code>@McpTool</code> exposes it to protocol clients. This server disables automatic callback conversion and publishes only its explicit MCP annotations.</p>
+        </div>
+        <pre class="code-example"><code>// LearningMcpCapabilities, active only in mcp-server
+@McpTool(name = "learning_outline",
+    description = "Read a public lesson outline")
+public Mono&lt;String&gt; lessonOutline(
+    @McpToolParam(description = "Learning topic", required = true)
+    String topic) {
+  return Mono.fromSupplier(
+      () -&gt; learningTools.getLessonOutline(topic));
+}
+
+@McpResource(uri = "learning://topics/{topic}",
+    name = "Lesson outline", mimeType = "text/plain")
+public Mono&lt;String&gt; topicResource(String topic) {
+  return Mono.fromSupplier(
+      () -&gt; learningTools.getLessonOutline(topic));
+}
+
+@McpPrompt(name = "study_topic")
+public Mono&lt;McpSchema.PromptMessage&gt; studyTopic(
+    @McpArg(name = "topic", required = true) String topic) {
+  return Mono.fromSupplier(() -&gt;
+      McpSchema.PromptMessage.builder(McpSchema.Role.USER,
+          McpSchema.TextContent.builder("Teach me: "
+              + learningTools.getLessonOutline(topic))
+              .build()).build());
+}</code></pre>
+      </article>
+
+      <article class="lesson-card lesson-card-reverse">
+        <div class="lesson-copy">
+          <span class="lesson-number">45</span>
+          <h3>Connect a Spring host without changing other modes</h3>
+          <p>The WebFlux client starter manages the connection and adapts discovered MCP tools into Spring AI <code>ToolCallback</code> objects. The existing model/tool/result loop can then call a remote capability.</p>
+          <p>The <code>mcp-client</code> profile enables one ASYNC connection named <code>lessons</code>. All MCP clients in an application use the same SYNC or ASYNC type. A provider supplies callbacks; this host filters them to the two known learning tools and registers them only for MCP chat.</p>
+          <p>Both client and server are disabled by default. Start the server first, then the client profile, select <strong>Use MCP tools</strong>, and use a tool-capable model. <code>GET /api/mcp</code> reports whether the client is enabled and which tool names it exposes. RAG remains the default mode.</p>
+        </div>
+        <pre class="code-example"><code># application-mcp-client.yml, essential settings
+spring.ai.mcp.client.enabled: true
+spring.ai.mcp.client.type: ASYNC
+spring.ai.mcp.client.request-timeout: 30s
+spring.ai.mcp.client.streamable-http.connections.lessons.url: ${MCP_SERVER_URL:http://127.0.0.1:8090}
+spring.ai.mcp.client.streamable-http.connections.lessons.endpoint: /mcp
+
+# Terminal 1: no running Ollama needed for capabilities
+SPRING_PROFILES_ACTIVE=mcp-server mvn spring-boot:run
+
+# Terminal 2: Ollama and a tool-capable model are needed
+SPRING_PROFILES_ACTIVE=mcp-client \
+OLLAMA_CHAT_MODEL=llama3.1:latest mvn spring-boot:run
+
+# Check the host, not the capability server:
+curl http://localhost:8080/api/mcp</code></pre>
+      </article>
+
+      <article class="lesson-card">
+        <div class="lesson-copy">
+          <span class="lesson-number">46</span>
+          <h3>Client callbacks are optional capabilities</h3>
+          <p>Depending on the protocol revision, servers can request sampling or elicit user input and can send logging, progress, or list-change notifications. The host decides which callbacks it supports and how to handle requests; a server does not gain unrestricted access to the host's model or user.</p>
+          <p>Spring AI provides client handler annotations such as <code>@McpSampling</code>, <code>@McpElicitation</code>, <code>@McpLogging</code>, <code>@McpProgress</code>, and <code>@McpToolListChanged</code>. The <code>clients</code> attribute scopes a handler to named connections, and reactive handlers must match ASYNC client type.</p>
+          <p>These are extension points to study. This demo does not register sampling or elicitation handlers, grant filesystem access, or refresh model tools through a dynamic list-change workflow.</p>
+        </div>
+        <pre class="code-example"><code>// Conceptual callback registration for an ASYNC host.
+// Type names and signatures depend on the SDK revision.
+//
+// @McpSampling(clients = "lessons")
+// Mono&lt;CreateMessageResult&gt; sample(CreateMessageRequest req)
+//
+// @McpElicitation(clients = "lessons")
+// Mono&lt;ElicitResult&gt; askUser(ElicitRequest req)
+//
+// Application responsibilities:
+// - apply model access and token budgets to sampling
+// - show elicitation to the user and honor refusal
+// - treat server messages and results as untrusted data
+// - reapply tool filters after any list refresh
+//
+// No callback above is activated by this lesson.</code></pre>
+      </article>
+
+      <article class="lesson-card lesson-card-reverse">
+        <div class="lesson-copy">
+          <span class="lesson-number">47</span>
+          <h3>Authorization belongs around every capability</h3>
+          <p>A discovered tool is not automatically authorized. MCP's HTTP authorization guidance builds on OAuth: a protected resource advertises authorization metadata, and a client obtains a token intended for that resource. Servers validate the token, audience, scopes, and the caller's permission for each operation.</p>
+          <p>Do not pass an incoming bearer token to an unrelated downstream service. A root URI communicates intended scope; it is not an enforced filesystem sandbox. Elicitation asks for input or consent; it does not replace authorization. Model-supplied tool arguments still require validation.</p>
+          <p>This learning server has no OAuth flow. It binds to loopback, checks Host and browser Origin, and exposes public read-only material. Those checks do not authenticate callers. A deployment serving protected data needs a security layer compatible with its WebFlux stack.</p>
+        </div>
+        <div class="pattern-diagram">
+          <span class="demo-label">SERVER-OWNED DECISIONS</span>
+          <ol class="pattern-flow">
+            <li><strong>Exposure</strong><span>Publish only the intended tools, resources, and prompts</span></li>
+            <li><strong>Authorization</strong><span>For protected deployments, validate credentials and per-operation access</span></li>
+            <li><strong>Execution</strong><span>Validate the topic and use the server-configured timezone</span></li>
+          </ol>
+          <p class="demo-footnote">Read-only annotations describe behavior. Enforcement comes from application code and access controls.</p>
+        </div>
+      </article>
+
+      <article class="lesson-card">
+        <div class="lesson-copy">
+          <span class="lesson-number">48</span>
+          <h3>Read examples against the supported protocol revision</h3>
+          <p>MCP revisions use dates. The pinned Spring AI 2.0.1 dependencies resolve Java SDK 2.0.0, whose supported handshake-based revisions extend through <code>2025-11-25</code>. This exercise initializes a connection before discovery and calls.</p>
+          <p>The newer <code>2026-07-28</code> specification describes per-request protocol and capability metadata, with optional client discovery through <code>server/discover</code>, and changes the lifecycle of some older features. Those newer semantics are not automatically enabled by a server's <code>STATELESS</code> setting.</p>
+          <p>Use the versioning reference and resolved SDK documentation before adding a feature. A tutorial's latest specification and a library's implemented revision can differ. The tests verify the protocol that the running client and server actually negotiate.</p>
+        </div>
+        <pre class="code-example"><code># Demo endpoints, with the server profile running:
+# MCP capability endpoint: http://127.0.0.1:8090/mcp
+# Server management:       http://127.0.0.1:9091/actuator
+# Host UI and chat API:    http://localhost:8080
+# Host management:         http://127.0.0.1:9090/actuator
+
+# Server configuration selects a transport mode:
+spring.ai.mcp.server.protocol: STREAMABLE
+
+# This alone would NOT select protocol 2026-07-28:
+# spring.ai.mcp.server.protocol: STATELESS
+
+# Ordinary startup keeps both integrations disabled:
+spring.ai.mcp.client.enabled: false
+spring.ai.mcp.server.enabled: false</code></pre>
+      </article>
+
+      <aside class="lesson-takeaway">
+        <strong>Run the complete local example</strong>
+        <p>Start the server profile, install a tool-capable model with <code>ollama pull llama3.1:latest</code>, then start the client profile and select MCP tools. Read the README for port overrides and request examples. The <a href="https://modelcontextprotocol.io/docs/learn/architecture">MCP architecture</a>, <a href="https://modelcontextprotocol.io/specification/versioning">protocol versioning</a>, <a href="https://docs.spring.io/spring-ai/reference/api/mcp/mcp-client-boot-starter-docs.html">Spring client starter</a>, and <a href="https://docs.spring.io/spring-ai/reference/api/mcp/mcp-server-boot-starter-docs.html">Spring server starter</a> references explain the wider protocol and optional features.</p>
       </aside>
     </section>
 

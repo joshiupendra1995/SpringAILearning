@@ -13,24 +13,28 @@ const tutorStatus = document.querySelector(".tutor-status");
 const modeHistory = new Map();
 let activeMode = modeSelect.value;
 let knowledgeIndexed = false;
+let mcpHelp = "Start the MCP lesson server, then enable the mcp-client profile. A tool-capable chat model is required.";
 
 const modeDescriptions = {
   tutor: "Ask freely with session memory. No retrieval or tools are used in this mode.",
   rag: "Answers search the learning notes. The first question prepares the index automatically; Ollama and nomic-embed-text must be available.",
-  tools: "The model can request the current time or lesson outlines. Requires a tool-capable model such as llama3.1."
+  tools: "The model can request the current time or lesson outlines. Requires a tool-capable model such as llama3.1.",
+  mcp: "Use read-only lesson tools discovered from a separate MCP server. Requires a tool-capable model such as llama3.1."
 };
 
 const modeSuggestions = {
   tutor: ["What is a token?", "Why are LLMs stateless?", "Where does Spring AI help?"],
   rag: ["Why should I split documents into chunks?", "How do embeddings find related text?", "How is RAG different from tool calling?"],
-  tools: ["What is the current date and time?", "Look up the rag lesson outline", "Look up the tools lesson outline"]
+  tools: ["What is the current date and time?", "Look up the rag lesson outline", "Look up the tools lesson outline"],
+  mcp: ["Look up the MCP lesson outline", "Read the lesson server's current time", "Look up the rag lesson outline"]
 };
 
 function updateModeHelp() {
-  modeHelp.textContent = modeDescriptions[activeMode];
+  modeHelp.textContent = activeMode === "mcp" ? mcpHelp : modeDescriptions[activeMode];
   ragTopicControls.hidden = activeMode !== "rag";
   tutorStatus.lastChild.textContent = activeMode === "rag"
     ? " RAG · local Ollama"
+    : activeMode === "mcp" ? " MCP tools · remote lesson server"
     : activeMode === "tools" ? " Java tools · local Ollama" : " General tutor · no retrieval";
   input.placeholder = activeMode === "rag" ? "Ask the learning notes…" : "Message your AI tutor…";
   document.querySelectorAll(".suggestion").forEach((button, index) => {
@@ -53,6 +57,19 @@ async function refreshKnowledgeStatus() {
   } catch {
     knowledgeStatus.textContent = "Knowledge status unavailable. Check that the app is running.";
   }
+}
+
+async function refreshMcpStatus() {
+  try {
+    const response = await fetch("/api/mcp");
+    const status = await response.json();
+    mcpHelp = !response.ok ? status.error || "Could not discover MCP tools. Check the lesson server."
+      : status.enabled ? `Available MCP tools: ${status.tools.join(", ")}. Requires a tool-capable chat model.`
+      : "MCP is disabled. Start the lesson server, then restart this app with the mcp-client profile and a tool-capable model.";
+  } catch {
+    mcpHelp = "MCP status unavailable. Check that the app is running.";
+  }
+  if (activeMode === "mcp") modeHelp.textContent = mcpHelp;
 }
 
 function addMessage(text, kind) {
@@ -111,7 +128,7 @@ async function askTutor(question) {
   newChatButton.disabled = true;
   const pendingText = requestMode === "rag"
     ? knowledgeIndexed ? "Searching the learning notes…" : "Preparing notes and searching…"
-    : "Thinking through that…";
+    : requestMode === "mcp" ? "Consulting the MCP lesson tools…" : "Thinking through that…";
   const pendingMessage = addMessage(pendingText, "assistant typing");
 
   try {
@@ -226,6 +243,7 @@ modeSelect.addEventListener("change", () => {
     addMessage(modeDescriptions[activeMode], "assistant");
   }
   updateModeHelp();
+  if (activeMode === "mcp") void refreshMcpStatus();
   input.focus();
 });
 
@@ -249,3 +267,4 @@ indexButton.addEventListener("click", async () => {
 
 updateModeHelp();
 void refreshKnowledgeStatus();
+void refreshMcpStatus();

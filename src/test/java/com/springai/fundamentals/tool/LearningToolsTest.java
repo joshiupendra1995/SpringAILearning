@@ -47,6 +47,7 @@ class LearningToolsTest {
         assertTrue(tools.getLessonOutline("advisors").contains("conversation IDs"));
         assertTrue(tools.getLessonOutline("rag").contains("embeddings"));
         assertTrue(tools.getLessonOutline("tools").contains("ToolContext"));
+        assertTrue(tools.getLessonOutline("mcp").contains("Streamable HTTP"));
 
         assertThrows(IllegalArgumentException.class, () -> tools.getLessonOutline(null));
         assertThrows(IllegalArgumentException.class, () -> tools.getLessonOutline(""));
